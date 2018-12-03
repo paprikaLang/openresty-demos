@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>openresty template</title>
+</head>
+<body>
+	{{ message }}
+	<hr>
+	{%
+		for i, v in ipairs(names) do
+	%}
+		{{i}} -- {{v}} <br>
+	{%
+		end
+	%}
+</body>
+</html>
