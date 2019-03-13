@@ -1,244 +1,21 @@
-### **iOS**
+> linux一般使用non-blocking IO提高IO并发度。当IO并发度很低时，non-blocking IO不一定比blocking IO更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于一般的多个线程协作的non-blocking IO。但当IO并发度愈发提高时，blocking IO阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个cpu core上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache没得到充分利用，另外大量的线程会使得依赖thread-local加速的代码性能明显下降，如tcmalloc，一旦malloc变慢，程序整体性能往往也会随之下降。
 
-对于同步方法的内部需要依赖其他异步过程的结果, iOS 的 第三方库 AFNetworking 采用了 GCD 信号量的方式实现.
+[]()
+> 而non-blocking IO一般由少量eventdispatching线程和一些运行用户逻辑的worker线程组成，这些线程往往会被复用（换句话说调度工作转移到了用户态），event dispatching和worker可以同时在不同的核运行（流水线化），内核不用频繁的切换就能完成有效的工作。线程总量也不用很多，所以对thread-local的使用也比较充分。这时候non-blocking IO就往往比blocking IO快了。不过non-blocking IO也有自己的问题，它需要调用更多系统调用，比如epoll_ctl，由于epoll实现为一棵红黑树，epoll_ctl并不是一个很快的操作，特别在多核环境下，依赖epoll_ctl的实现往往会面临棘手的扩展性问题。non-blocking需要更大的缓冲，否则就会触发更多的事件而影响效率。non-blocking还得解决不少多线程问题，代码比blocking复杂很多。
 
-即发起连接请求之前，创建一个初始值为 0 的信号量，在方法返回之前阻塞函数, 请求该信号量，直到在连接请求的结果回调中释放该信号量. 
+[]()
+> asynchronous IO: 无需负责读写，把buffer提交给内核后,内核会把数据从内核拷贝到用户空间，然后告诉你已可读.
 
-```objectivec	
-- (NSArray *)tasksForKeyPath:(NSString *)keyPath {
-    __block NSArray *tasks = nil;
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    [self.session getTasksWithCompletionHandler:^(NSArray *dataTasks, NSArray *uploadTasks, NSArray *downloadTasks) {
-        if ([keyPath isEqualToString:NSStringFromSelector(@selector(dataTasks))]) {
-            tasks = dataTasks;
-        } else if (){
-			...
-        } else if ([keyPath isEqualToString:NSStringFromSelector(@selector(tasks))]) {
-            tasks = [@[dataTasks, uploadTasks, downloadTasks] valueForKeyPath:@"@unionOfArrays.self"];
-        }
+ ---- [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
-        dispatch_semaphore_signal(semaphore);
-    }];
+ <br>
 
-    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
-
-    return tasks;
-}
-```
-
-<br>
-
-### **JavaScript**
-
-
-这个信号量的实现过程其实很吻合 JavaScript  async/await 的内部原理. 
-
-async 将 generator 和其自动执行器包装在同一个函数里, 相当于 AFNetworking 的 tasksForKeyPath 函数. 
-
-而 generator 的 yield 就是 dispatch_semaphore_wait , 执行器 next 就是 dispatch_semaphore_signal .
-
-```javascript
-//执行器
-function ajax(url) {
-    axios.get(url).then(result => userGen.next(result.data))
-}
-
-function* steps() {
-    const a = yield ajax('https://api.github.com/users');
-    const b = yield ajax(`https://api.github.com/users/${a[0].login}`);
-    const c = yield ajax(b.followers_url);
-    console.log(c);
-}
-const userGen = steps();
-userGen.next();
-```
-```javascript
-//自动执行器
-const thunkify = require('thunkify');
-function run(fn) {
-  var gen = fn();
-  function next(err, data) {
-    var result = gen.next(data);
-    if (result.done) return;
-    result.value(next);
-  }
-  next();
-}
-
-var get = thunkify(axios.get);
-function* steps() {
-    const a = yield get('https://api.github.com/users');
-    const b = yield get(`https://api.github.com/users/${a[0].login}`);
-    const c = yield get(b.followers_url);
-    console.log(c);
-}
-run(steps)
-```
-```javascript
-async function fn(args){
-  // 等同于下面的形式
-}
-// spawn内部实现了自动执行器
-function fn(args){ 
-  return spawn(function*() {
-  	  ...
-  }); 
-}
-```
-不过 async await 应用时还需要注意两点:
-
-**1. JavaScript 的事件循环和任务队列**
-
-<img src="https://paprika-dev.b0.upaiyun.com/g3dtpqSgppOEBpvao7ogbPLWQUxSNEDYAFc9KZUZ.png" width="300"/>
-
-  - Promise 对象属于微任务. 
-
-如图, 事件循环的同步代码执行完毕后才会依次执行微任务队列中的回调函数,并返回异步执行的结果. 
-
-```javascript
-const files = await getFiles();
-let totalSize = 0;
-
-await Promise.all(
-	files.map(async file => {
-		totalSize += await getSize(file);  // totalSize = 0 + await getSize(file);
-	})
-);
-```
-```javascript
-await Promise.all(
-	files.map(async file => {
-	  	const size = await getSize(file);  
-	  	totalSize += size;
-	})
-);
-```
-
-  - 关于浏览器渲染
-
-如果一帧内有多处DOM修改, 浏览器会积攒起来一次绘制, 不会像图中显示的每轮事件循环都去渲染更新.
-
- Vue3.0 将会推出 Time Slicing Supoort :  每隔一帧 yield 给浏览器响应新的用户事件, 这样即使有用户事件产生了大量计算也不会影响事件回调函数的执行和浏览器渲染.
-
- iOS 的渲染更新节点也是在 Application object 处理完事件队列中所有的用户交互之后, 控制流将要回到主 Runloop 之时.
-被标记为 "update layout" "needs display" 的视图在 `update cycle` 中完成渲染更新, 然后 Runloop 重启进入下一个循环.
-
-**2. 并发与阻塞的问题**
-
-```javascript
-async function getZhihuColumn(id) {
-	await sleep(2000);
-	const url = `https://zhuanlan.zhihu.com/api/columns/${id}`;
-    const response = await fetch(url);
-    if (response.status !== 200) {
-    	throw new Error(response.statusText);
-    }
-    return await response.json();
-}
-
-const showColumnInfo = async () => {
-	try {
-        console.time('showColumnInfo');
-        const feweekly = await getZhihuColumn('feweekly');
-		const tooling  = await getZhihuColumn('toolingtips');
-		console.timeEnd('showColumnInfo');
-	} catch(err) {
-        console.error(err);  
-	}
-}
-```
-```javascript
-	const feweeklyPromise =  getZhihuColumn('feweekly');
-	const toolingPromise  =  getZhihuColumn('toolingtips');
-	const feweekly = await feweeklyPromise;  // 相较前者并发了,但依旧阻塞
-	const tooling  = await toolingPromise;
-	console.log("---------");
-```
-```javascript
-	getZhihuColumn('feweekly').then(feweekly => { // 异步非阻塞: 并发并且非阻塞
-		console.log(`NAME: ${feweekly.name}`);
-	})
-	getZhihuColumn('toolingtips').then(tooling => {
-		return tooling.name;
-	}).then(name => {
-		console.log(name);
-	})
-	console.log("---------");
-```
-
-<br>
-
-### **Swoole**
-
-```php
-use Swoole\Coroutine as Co;
-go(function() {
-	// Co::sleep(1);
-	sleep(1);
-	echo "mysql search ...".PHP_EOL;
-});
-echo "main".PHP_EOL;
-go(function() {
-	// Co::sleep(2);
-	sleep(2);
-	echo "response wait ...".PHP_EOL;
-});
-```
-
-Swoole 的 Co::sleep() 模拟的是协程中的 IO 密集型任务, 它会像 await 一样阻塞在那里. 但不同于 node 的异步非阻塞机制, 协程是通过自动让出控制权, 调度给其他已经完成 IO 任务的协程, 实现并发.
-
-```bash
-> time php go.php
- main
- mysql search ...
- response wait ...
- php go.php  0.08s user 0.02s system 4% cpu 2.107 total
-```
-
-而 sleep() 可以看做是 CPU 密集型任务, 从结果上看, 它不会引起协程的调度. 
-
-```bash
-> time php go.php
- mysql search ...
- main
- response wait ...
- php go.php  0.10s user 0.05s system 4% cpu 3.181 total
-```
-
-这是因为协程的内部也是基于事件驱动. 协程又叫做用户态线程, 和同步阻塞程序的主要区别在于进程/线程是操作系统在充当事件循环的调度, 而协程是由 epoll 自行调度.
-
-<img src="https://paprika-dev.b0.upaiyun.com/eHJffMVYi5Egby6rQpC0c08gGXNO1G2F0FKglSGP.png">
-
-epoll 向内核注册了回调函数，回调函数会把准备好的 socket fd 加入一个就绪链表, 执行 epoll_wait 时拷贝就绪链表里的 socket 数据到用户态, 这个过程遵循多路复用的同步 IO 事件原理, 通过监听多个IO事件, 等待事件触发的通知来执行读写任务而无需轮询, 不同于异步 IO 由内核来完成读写任务再通知应用程序数据结果.
-
-Reactor 模型是常见的处理 同步IO事件 的模型.
-
-它工作流程是: I/O事件触发，激活事件分离器，分离器调度对应的事件处理器；事件处理器完成I/O操作，处理数据.
-
-<img src="https://paprika-dev.b0.upaiyun.com/GOgcviIiHMGvwThrnfjHbGMY03Sov5ZfuXriE2rj.png">
-
-在 Swoole 4.0 中主协程就是 Reactor 协程，负责整个事件循环的运行. 
-在工作协程中执行一些IO操作时，底层会将IO事件注册到事件循环，并让出执行权. 
-主协程的 Reactor 会继续处理 IO 事件、监听新事件(epoll_wait), 有 IO 事件完成后唤醒其工作协程.
-
-
-Swoole 的多进程 + 多线程模型: 
-
-<img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="500">
-
-可以把 Reactor 也就是 Master Process 看做 Nginx ，Work Process 是 php-FPM . 
-
-<img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="500">
-
-Reactor 线程异步并行地处理网络请求，然后转发给 Work Process, Work Process 接收数据回调至 PHP 业务层, 再将来自 PHP 层的数据和连接控制信息发送给 Reactor. 
-
-<br>
-
-### **Openresty**
-
-Cosocket , 是 Lua 协程与 Nginx 事件通知相结合的成果. 
+**OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatching 和 lua 语言的协程特性 实现的:
 
 <img src="https://paprika-dev.b0.upaiyun.com/HLcw2ecSy1BfRzNTm16uoIpfD9X5HC5lr30BlWqm.png">
+
+Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
+当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
 
 ```lua
 local sock, err = ngx.socket.tcp()
@@ -252,124 +29,237 @@ else
 	ngx.say(bytes)
 end
 ```
-
-而在书写上也真正实现了 **完全的同步方式** 替代 **异步的回调机制**(在 Swoole 部分支持协程的回调函数里, 其实也是可以实现的).
-
 <br>
 
-### **Golang**
+**Golang** 在 linux 上是通过 runtime 包中的 netpoll_epoll.go 也实现了底层 event dispatching .
 
-每个系统级线程都会有一个固定大小的栈, 用来保存函数递归调用时参数和局部变量.
+```golang
+// +build linux
+package runtime
+// epoll 最核心的几个系统调用
+func epollcreate(size int32) int32 //等价于glibc的epoll_create1和 epoll_create
+func epollcreate1(flags int32) int32
+func epollctl(epfd, op, fd int32, ev *epollevent) int32
+func epollwait(epfd int32, ev *epollevent, nev, timeout int32) int32
 
-但 Goroutine 会以一个很小的栈启动,当遇到深度递归导致栈空间不够时, 可以动态扩展栈的空间. 
+func closeonexec(fd int32)
 
-因为启动的代价很小, Goroutine 可以轻易开启无数个 Goroutine.
-
-<br>
-
-回到文章最开始的问题, 同步方法内部依赖异步执行的结果, Golang 会如何实现?
-
-```go
-func main() {
-	var mu sync.Mutex
-	mu.Lock()
-	go func() {
-		println("response wait ... ")
-		mu.Unlock()
-	}()
-	mu.Lock()
+var (
+	epfd int32 = -1 // epoll descriptor
+)
+// to initialize the poller
+func netpollinit() { 
+	epfd = epollcreate1(_EPOLL_CLOEXEC)
+	if epfd >= 0 {
+		return
+	}
+	epfd = epollcreate(1024)
+	if epfd >= 0 {
+		closeonexec(epfd)
+		return
+	}
+	throw("runtime: netpollinit failed")
 }
-```
-```go
-func main() {
-	done := make(chan int,1)
-	go func() {
-		println("response wait ... ")
-		done <- 1
-	}()
-	<- done
+// to arm edge-triggered notifications and associate fd with pd
+func netpollopen(fd uintptr, pd *pollDesc) int32 {
+	var ev epollevent
+	// _EPOLLRDHUP 解决了对端socket关闭，epoll本身并不能直接感知到这个关闭动作的问题
+	ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET 
+	*(**pollDesc)(unsafe.Pointer(&ev.data)) = pd
+	return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &ev)
 }
-```
-
-Swoole 实现 channel :
-
-```php
-$serv = new \swoole_http_server("127.0.0.1", 9503, SWOOLE_BASE);
-
-$serv->on('request', function ($req, $resp) {
-    $chan = new chan(2);
-    go(function () use ($chan) {
-        $cli = new Swoole\Coroutine\Http\Client('www.qq.com', 80);
-            $cli->set(['timeout' => 10]);
-            $cli->setHeaders([
-            'Host' => "www.qq.com",
-            "User-Agent" => 'Chrome/49.0.2587.3',
-            'Accept' => 'text/html,application/xhtml+xml,application/xml',
-            'Accept-Encoding' => 'gzip',
-        ]);
-        $ret = $cli->get('/');
-        $chan->push(['www.qq.com' => $cli->body]);
-    });
-
-    go(function () use ($chan) {
-        $cli = new Swoole\Coroutine\Http\Client('www.163.com', 80);
-        $cli->set(['timeout' => 10]);
-        $cli->setHeaders([
-            'Host' => "www.163.com",
-            "User-Agent" => 'Chrome/49.0.2587.3',
-            'Accept' => 'text/html,application/xhtml+xml,application/xml',
-            'Accept-Encoding' => 'gzip',
-        ]);
-        $ret = $cli->get('/');
-        $chan->push(['www.163.com' => $cli->body]);
-    });
-
-    $result = [];
-    for ($i = 0; $i < 2; $i++)
-    {
-        $result += $chan->pop();
-    }
-    $resp->end(json_encode($result));
-});
-$serv->start();
-```
-
-Swoole 实现 waitgroup : 
-
-```php
-class WaitGroup
-{
-	private $count = 0;
-	private $chan;
-	
-	function __construct()
-	{
-		$this->chan = new chan;
+// returns list of goroutines that become runnable
+func netpoll(block bool) *g {
+	if epfd == -1 {
+		return nil
 	}
-	function add() {
-		$this->count++;
+	waitms := int32(-1)
+	if !block {
+		waitms = 0
 	}
-	function done() {
-		$this->chan->push(true);
+	var events [128]epollevent
+retry:
+    // epollwait 返回的n个event事件
+	n := epollwait(epfd, &events[0], int32(len(events)), waitms)
+	if n < 0 {
+		if n != -_EINTR {
+			println("runtime: epollwait on fd", epfd, "failed with", -n)
+			throw("runtime: netpoll failed")
+		}
+		goto retry
 	}
-	function wait() {
-		for ($i=0; $i < $this->count; $i++) { 
-			$this->chan->pop();
+	var gp guintptr
+	for i := int32(0); i < n; i++ {
+		ev := &events[i]
+		if ev.events == 0 {
+			continue
+		}
+		var mode int32
+		if ev.events&(_EPOLLIN|_EPOLLRDHUP|_EPOLLHUP|_EPOLLERR) != 0 {
+			mode += 'r'
+		}
+		if ev.events&(_EPOLLOUT|_EPOLLHUP|_EPOLLERR) != 0 {
+			mode += 'w'
+		}
+		if mode != 0 {
+			// 将event.data 转成*pollDesc类型
+			pd := *(**pollDesc)(unsafe.Pointer(&ev.data))
+			// 再调用netpoll.go中的netpollready函数
+			netpollready(&gp, pd, mode)
 		}
 	}
-}
-
-go(function() {
-	$wg = new WaitGroup;
-	for ($i=0; $i < 10; $i++) { 
-		$wg->add();
-		go(function() use ($wg, $i){
-			co::sleep(.3);
-			echo "hello $i\n";
-			$wg->done();
-		});
+	if block && gp == 0 {
+		goto retry
 	}
-	$wg->wait();
-	echo "all done\n";
-});
+	return gp.ptr()
+}
 ```
+
+```golang
+func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
+	var rg, wg guintptr
+	if mode == 'r' || mode == 'r'+'w' {
+		// 将pollDesc的状态改成 pdReady 并返回就绪协程的地址
+		// IO事件唤醒协程 pdReady, 如果true改成false表示超时唤醒
+		rg.set(netpollunblock(pd, 'r', true))
+	}
+	if mode == 'w' || mode == 'r'+'w' {
+		wg.set(netpollunblock(pd, 'w', true))
+	}
+	if rg != 0 {
+		// 将就绪协程添加至链表中
+		rg.ptr().schedlink = *gpp
+		*gpp = rg
+	}
+	if wg != 0 {
+		wg.ptr().schedlink = *gpp
+		*gpp = wg
+	}
+}
+```
+
+netpollinit 的调用要经过 fd_unix.go 中 netFD 的 Init --> fd_poll_runtime.go 中 `pollDesc` 的 init --> netpoll.go 中的 runtime_pollServerInit 一系列方法才能生成 epoll 单例( serverInit.Do ), 下一步 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
+
+`pollDesc` 是对 netpoll_epoll.go 的封装, 通过统一接口供 net 库使用, 例如 net.go 的 Read 方法就调用了 netFD 的如下代码:
+
+```golang
+for {
+	 // 系统调用Read读取数据
+	n, err := syscall.Read(fd.Sysfd, p)
+	if err != nil {
+		n = 0
+		// 处理EAGAIN类型的错误，其他错误一律返回给调用者
+		if err == syscall.EAGAIN && fd.pd.pollable() {
+			// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
+			// waitRead 方法最终调用的是接口: runtime_pollWait
+			if err = fd.pd.waitRead(fd.isFile); err == nil {
+				continue
+			}
+		}
+	}
+	err = fd.eofError(n, err)
+	return n, err
+}
+```
+```golang
+func poll_runtime_pollWait(pd *pollDesc, mode int) int {
+	err := netpollcheckerr(pd, int32(mode))
+	if err != 0 {
+		return err
+	}
+	// netpollblock返回值如果为true，表示是有读写事件发生, g被唤醒(netpollready), 可以 continue Read 了
+	for !netpollblock(pd, int32(mode), false) {
+		err = netpollcheckerr(pd, int32(mode))
+		if err != 0 {
+			return err
+		}
+	}
+	return 0
+}
+```
+```golang
+func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
+    gpp := &pd.rg
+    if mode == 'w' {
+        gpp = &pd.wg
+    }
+    // 将pd.rg设为pdWait,使用for循环是因为casuintptr使用了自旋锁,可能会失败
+    for {
+        old := *gpp
+        if old == pdReady {
+            *gpp = 0
+            return true
+        }
+        if old != 0 {
+            throw("netpollblock: double wait")
+        }
+        // 如果成功，跳出循环
+        if casuintptr(gpp, 0, pdWait) {
+            break
+        }
+    }
+    // gopark会阻塞当前协程g, gopark阻塞g之前，先调用了netpollblockcommit
+    // 该函数将pd.rg从pdWait变成g的地址, 为了在收到IO事件时知道该唤醒哪条协程:
+    // casuintptr((*uintptr)(gpp), pdWait,  uintptr(unsafe.Pointer(gp)))
+    if waitio || netpollcheckerr(pd, mode) == 0 {
+        gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
+    }
+    // 可能是被挂起的协程被唤醒或者由于某些原因该协程压根未被挂起,获取其当前状态记录在old中
+    old := xchguintptr(gpp, 0)
+    if old > pdWait {
+        throw("netpollblock: corrupted state")
+    }
+    return old == pdReady
+}
+```
+
+sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; findrunnable 在调用 schedule() 时触发; golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 这三种场景下最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
+
+<br>
+
+**Swoole**
+
+ I/O multiplexing (epoll)实现的复杂度是很高的, 事件处理模型 Reactor 可以将关注的I/O事件注册到多路复用器上，一旦有I/O事件触发，可将事件分发到事件处理器中，并执行就绪的I/O事件对应的处理函数. Reactor 本身与具体事件处理逻辑无关，只负责运行事件处理循环, 监视一个socket句柄的事件变化, 具有很高的复用性; 如果和 半同步/半异步 的并发模式结合在一起, 并且在每个处理事件逻辑的worker线程也独立维护自己的事件循环, 处理多个I/O事件, 可以显著提高CPU的使用率.
+
+Swoole 的 Master Process 中 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发到 WorkThread Pool .
+
+<img src="https://tech.youzan.com/content/images/2017/04/16.png" width="450px;">
+
+Master Process 和 Work Process (多进程+Reactor)从整体上看类似 同步 I/O 模拟的 Proactor 模式: WorkThread 通过 Reactor 在读就绪事件上不断监听读取数据 并封装成请求对象交给 Work Process 处理客户请求, Work Process 向 WorkThread 注册写就绪事件, WorkThread 开始循环等待 Work Process 的响应结果, Work Process 将数据收发和数据处理分离开来，即使 PHP 层的某个数据处理将 Work Process 阻塞了一段时间，也不会对其他数据收发有影响.
+
+<img src="https://tech.youzan.com/content/images/2017/04/11.png" width="450px;">
+
+<img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
+
+也可以把 Master Process 看做 Nginx ，Work Process 是 php-FPM . 
+
+<img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="450px;">
+
+Swoole 的进程间通信
+
+<img src="https://paprika-dev.b0.upaiyun.com/5zXMb0l35WtYXpAaqn1VPbkxaCijNB7xRNkntuX5.png" width="600px;">
+
+<br>
+
+*注*
+
+[百万 Go TCP 连接的思考2: 百万连接的吞吐率和延迟](https://colobu.com/2019/02/27/1m-go-tcp-connection-2/)
+[Benchmark for implementation of servers that support 1m connections](https://github.com/smallnest/1m-go-tcp-server)
+
+8_server_workerpool: use **Reactor** pattern to implement multiple event loops
+
+9_few_clients_high_throughputs: a simple goroutines per connection server for test throughtputs and latency
+
+10_io_intensive_epoll_server: an io-bound multiple epoll server
+
+11_io_intensive_goroutine: an io-bound goroutines per connection server
+
+12_cpu_intensive_epoll_server: a cpu-bound multiple epoll server
+
+13_cpu_intensive_goroutine: an cpu-bound goroutines per connection server
+
+*参考*
+
+[tracymacding 的 gitbook](https://tracymacding.gitbooks.io/implementation-of-golang/content/)
+
+[异步网络模型](https://tech.youzan.com/yi-bu-wang-luo-mo-xing/)
