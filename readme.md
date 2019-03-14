@@ -1,12 +1,13 @@
-> linux一般使用non-blocking IO提高IO并发度。当IO并发度很低时，non-blocking IO不一定比blocking IO更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于一般的多个线程协作的non-blocking IO。但当IO并发度愈发提高时，blocking IO阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个cpu core上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache没得到充分利用，另外大量的线程会使得依赖thread-local加速的代码性能明显下降，如tcmalloc，一旦malloc变慢，程序整体性能往往也会随之下降。
+
+> linux一般使用non-blocking IO提高IO并发度。当IO并发度很低时，non-blocking IO不一定比blocking IO更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于多个线程协作的non-blocking IO。但当IO并发度愈发提高时，blocking IO阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个cpu core上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache没得到充分利用，另外大量的线程会使得依赖thread-local加速的代码性能明显下降，如tcmalloc，一旦malloc变慢，程序整体性能往往也会随之下降。
 
 []()
 > 而non-blocking IO一般由少量eventdispatching线程和一些运行用户逻辑的worker线程组成，这些线程往往会被复用（换句话说调度工作转移到了用户态），event dispatching和worker可以同时在不同的核运行（流水线化），内核不用频繁的切换就能完成有效的工作。线程总量也不用很多，所以对thread-local的使用也比较充分。这时候non-blocking IO就往往比blocking IO快了。不过non-blocking IO也有自己的问题，它需要调用更多系统调用，比如epoll_ctl，由于epoll实现为一棵红黑树，epoll_ctl并不是一个很快的操作，特别在多核环境下，依赖epoll_ctl的实现往往会面临棘手的扩展性问题。non-blocking需要更大的缓冲，否则就会触发更多的事件而影响效率。non-blocking还得解决不少多线程问题，代码比blocking复杂很多。
 
 []()
-> asynchronous IO: 无需负责读写，把buffer提交给内核后,内核会把数据从内核拷贝到用户空间，然后告诉你已可读.
+> asynchronous IO: 无需负责读写，把buffer提交给内核后,内核会把数据从内核拷贝到用户态，然后告诉你已可读.
 
-   --- --- [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
+   ---   [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
  <br>
 
@@ -31,7 +32,7 @@ end
 ```
 <br>
 
-**Golang** 在 linux 上是通过 runtime 包中的 netpoll_epoll.go 也实现了底层 event dispatching .
+**Golang** 在 linux 上通过 runtime 包中的 netpoll_epoll.go 也实现了底层的 event dispatching .
 
 ```go
 // +build linux
@@ -120,7 +121,7 @@ func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 	var rg, wg guintptr
 	if mode == 'r' || mode == 'r'+'w' {
 		// 将pollDesc的状态改成 pdReady 并返回就绪协程的地址
-		// IO事件唤醒协程 pdReady, 如果true改成false表示超时唤醒
+		// IO事件唤醒协程, 如果true改成false表示超时唤醒
 		rg.set(netpollunblock(pd, 'r', true))
 	}
 	if mode == 'w' || mode == 'r'+'w' {
@@ -138,9 +139,9 @@ func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 }
 ```
 
-netpollinit 的调用要经过 fd_unix.go 中 netFD 的 Init --> fd_poll_runtime.go 中 `pollDesc` 的 init --> netpoll.go 中的 runtime_pollServerInit 一系列方法才能生成 epoll 单例( serverInit.Do ), 下一步 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
+netpollinit 要经过 fd_unix.go 中 netFD 的 Init --> fd_poll_runtime.go 中 `pollDesc` 的 init --> netpoll.go 中的 runtime_pollServerInit 一系列方法才能生成 epoll 单例( serverInit.Do ), 然后 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
 
-`pollDesc` 是对 netpoll_epoll.go 的封装, 通过统一接口供 net 库使用, 例如 net.go 的 Read 方法就调用了 netFD 的如下代码:
+`pollDesc` 是对 netpoll_epoll.go 的封装, 提供统一接口给 net 库使用, 例如 net.go 中的 Read 方法就调用了 netFD 的如下代码:
 
 ```go
 for {
@@ -183,7 +184,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
     if mode == 'w' {
         gpp = &pd.wg
     }
-    // 将pd.rg设为pdWait,使用for循环是因为casuintptr使用了自旋锁,可能会失败
+    // 将pd.rg设为pdWait, casuintptr使用了自旋锁, for循环防止赋值失败
     for {
         old := *gpp
         if old == pdReady {
@@ -213,7 +214,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; findrunnable 在调用 schedule() 时触发; golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 这三种场景下最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
+sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; findrunnable 在调用 schedule() 时触发; golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
 
 <br>
 
@@ -221,15 +222,15 @@ sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获�
 
 <img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
 
-事件处理模型 Reactor 将I/O事件注册到多路复用器上，事件分离器将多路复用器返回的就绪事件分发到事件处理器中，并执行事件的处理函数.
+事件处理模型 Reactor 将I/O事件注册到多路复用器上，事件分离器将多路复用器返回的就绪事件分发到事件处理器中执行事件的处理函数.
 
-Swoole 的 Main Thread , WorkThread , Work Process 均是依赖 Reactor 驱动, 按照 epoll I/O复用 -> 分发 -> 处理业务逻辑 这样的模式运行.
+Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 epoll I/O复用 -> 分发 -> 处理业务逻辑 这样的模式运行.
 
 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
 <img src="https://paprika-dev.b0.upaiyun.com/9qp6K1dYE0gu7rfqDqG7qr3NqGwhg8o5Ba91EdYY.jpeg" width="450px;">
 
-WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给 Work Process 来处理请求对象的业务逻辑.
+WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
 
 WorkThread 会接收到这个 Work Process 注册的写就绪事件, 然后等待业务逻辑处理完成并触发此事件. 
 
@@ -239,7 +240,7 @@ WorkThread <=> Work Process 整个过程类似 同步 I/O 模拟的 Proactor 模
 
 <img src="https://tech.youzan.com/content/images/2017/04/11.png" width="450px;">
 
-从整体上我们也可以把 Master Process 看成是 Nginx ，Work Process 当做 php-FPM . 
+从整体上看 Master Process + Work Process 类似于 Nginx + php-FPM . 
 
 <img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="450px;">
 
@@ -271,3 +272,4 @@ Swoole 的进程间通信
 [tracymacding 的 gitbook](https://tracymacding.gitbooks.io/implementation-of-golang/content/)
 
 [异步网络模型](https://tech.youzan.com/yi-bu-wang-luo-mo-xing/)
+
