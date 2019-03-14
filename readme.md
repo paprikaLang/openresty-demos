@@ -6,7 +6,7 @@
 []()
 > asynchronous IO: 无需负责读写，把buffer提交给内核后,内核会把数据从内核拷贝到用户空间，然后告诉你已可读.
 
- ---- [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
+   --- --- [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
  <br>
 
@@ -33,10 +33,10 @@ end
 
 **Golang** 在 linux 上是通过 runtime 包中的 netpoll_epoll.go 也实现了底层 event dispatching .
 
-```golang
+```go
 // +build linux
 package runtime
-// epoll 最核心的几个系统调用
+// epoll 最核心的几个调用
 func epollcreate(size int32) int32 //等价于glibc的epoll_create1和 epoll_create
 func epollcreate1(flags int32) int32
 func epollctl(epfd, op, fd int32, ev *epollevent) int32
@@ -115,7 +115,7 @@ retry:
 }
 ```
 
-```golang
+```go
 func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 	var rg, wg guintptr
 	if mode == 'r' || mode == 'r'+'w' {
@@ -142,7 +142,7 @@ netpollinit 的调用要经过 fd_unix.go 中 netFD 的 Init --> fd_poll_runtime
 
 `pollDesc` 是对 netpoll_epoll.go 的封装, 通过统一接口供 net 库使用, 例如 net.go 的 Read 方法就调用了 netFD 的如下代码:
 
-```golang
+```go
 for {
 	 // 系统调用Read读取数据
 	n, err := syscall.Read(fd.Sysfd, p)
@@ -161,7 +161,7 @@ for {
 	return n, err
 }
 ```
-```golang
+```go
 func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	err := netpollcheckerr(pd, int32(mode))
 	if err != 0 {
@@ -177,7 +177,7 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	return 0
 }
 ```
-```golang
+```go
 func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
     gpp := &pd.rg
     if mode == 'w' {
@@ -219,19 +219,27 @@ sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获�
 
 **Swoole**
 
- I/O multiplexing (epoll)实现的复杂度是很高的, 事件处理模型 Reactor 可以将关注的I/O事件注册到多路复用器上，一旦有I/O事件触发，可将事件分发到事件处理器中，并执行就绪的I/O事件对应的处理函数. Reactor 本身与具体事件处理逻辑无关，只负责运行事件处理循环, 监视一个socket句柄的事件变化, 具有很高的复用性; 如果和 半同步/半异步 的并发模式结合在一起, 并且在每个处理事件逻辑的worker线程也独立维护自己的事件循环, 处理多个I/O事件, 可以显著提高CPU的使用率.
+<img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
 
-Swoole 的 Master Process 中 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发到 WorkThread Pool .
+事件处理模型 Reactor 将I/O事件注册到多路复用器上，事件分离器将多路复用器返回的就绪事件分发到事件处理器中，并执行事件的处理函数.
 
-<img src="https://tech.youzan.com/content/images/2017/04/16.png" width="450px;">
+Swoole 的 Main Thread , WorkThread , Work Process 均是依赖 Reactor 驱动, 按照 epoll I/O复用 -> 分发 -> 处理业务逻辑 这样的模式运行.
 
-Master Process 和 Work Process (多进程+Reactor)从整体上看类似 同步 I/O 模拟的 Proactor 模式: WorkThread 通过 Reactor 在读就绪事件上不断监听读取数据 并封装成请求对象交给 Work Process 处理客户请求, Work Process 向 WorkThread 注册写就绪事件, WorkThread 开始循环等待 Work Process 的响应结果, Work Process 将数据收发和数据处理分离开来，即使 PHP 层的某个数据处理将 Work Process 阻塞了一段时间，也不会对其他数据收发有影响.
+Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
+
+<img src="https://paprika-dev.b0.upaiyun.com/9qp6K1dYE0gu7rfqDqG7qr3NqGwhg8o5Ba91EdYY.jpeg" width="450px;">
+
+WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给 Work Process 来处理请求对象的业务逻辑.
+
+WorkThread 会接收到这个 Work Process 注册的写就绪事件, 然后等待业务逻辑处理完成并触发此事件. 
+
+Work Process 将数据收发和数据处理分离开来，这样即使 PHP 层的某个数据处理将 Work Process   阻塞了一段时间，也不会对其他数据收发产生影响.
+
+WorkThread <=> Work Process 整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
 <img src="https://tech.youzan.com/content/images/2017/04/11.png" width="450px;">
 
-<img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
-
-也可以把 Master Process 看做 Nginx ，Work Process 是 php-FPM . 
+从整体上我们也可以把 Master Process 看成是 Nginx ，Work Process 当做 php-FPM . 
 
 <img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="450px;">
 
