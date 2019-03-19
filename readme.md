@@ -1,4 +1,3 @@
-
 > linux一般使用non-blocking IO提高IO并发度。当IO并发度很低时，non-blocking IO不一定比blocking IO更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于多个线程协作的non-blocking IO。但当IO并发度愈发提高时，blocking IO阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个cpu core上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache没得到充分利用，另外大量的线程会使得依赖thread-local加速的代码性能明显下降，如tcmalloc，一旦malloc变慢，程序整体性能往往也会随之下降。
 
 []()
@@ -9,7 +8,10 @@
 
    ---   [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
- <br>
+
+<br>
+
+<br>
 
 **OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatching 和 lua 语言的协程特性 实现的:
 
@@ -30,6 +32,9 @@ else
 	ngx.say(bytes)
 end
 ```
+
+<br>
+
 <br>
 
 **Golang** 在 linux 上通过 runtime 包中的 netpoll_epoll.go 也实现了底层的 event dispatching .
@@ -37,13 +42,10 @@ end
 ```go
 // +build linux
 package runtime
-// epoll 最核心的几个调用
 func epollcreate(size int32) int32 //等价于glibc的epoll_create1和 epoll_create
 func epollcreate1(flags int32) int32
 func epollctl(epfd, op, fd int32, ev *epollevent) int32
 func epollwait(epfd int32, ev *epollevent, nev, timeout int32) int32
-
-func closeonexec(fd int32)
 
 var (
 	epfd int32 = -1 // epoll descriptor
@@ -71,13 +73,7 @@ func netpollopen(fd uintptr, pd *pollDesc) int32 {
 }
 // returns list of goroutines that become runnable
 func netpoll(block bool) *g {
-	if epfd == -1 {
-		return nil
-	}
-	waitms := int32(-1)
-	if !block {
-		waitms = 0
-	}
+
 	var events [128]epollevent
 retry:
     // epollwait 返回的n个event事件
@@ -124,17 +120,11 @@ func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 		// IO事件唤醒协程, 如果true改成false表示超时唤醒
 		rg.set(netpollunblock(pd, 'r', true))
 	}
-	if mode == 'w' || mode == 'r'+'w' {
-		wg.set(netpollunblock(pd, 'w', true))
-	}
+	// wg 与 rg 逻辑相同, 代码省略
 	if rg != 0 {
 		// 将就绪协程添加至链表中
 		rg.ptr().schedlink = *gpp
 		*gpp = rg
-	}
-	if wg != 0 {
-		wg.ptr().schedlink = *gpp
-		*gpp = wg
 	}
 }
 ```
@@ -222,9 +212,9 @@ sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获�
 
 <img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
 
-事件处理模型 Reactor 将I/O事件注册到多路复用器上，事件分离器将多路复用器返回的就绪事件分发到事件处理器中执行事件的处理函数.
+事件处理模型 Reactor 将I/O事件注册到多路复用器(能维护自己的事件循环, 监听不同的I/O事件)上，一旦有事件触发, 事件分离器就会将其分发到事件处理器中执行事件的处理逻辑.
 
-Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 epoll I/O复用 -> 分发 -> 处理业务逻辑 这样的模式运行.
+Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 注册事件等待触发 -> 分发 -> 处理 这样的模式运行.
 
 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
@@ -232,19 +222,19 @@ Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事
 
 WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
 
-WorkThread 会接收到这个 Work Process 注册的写就绪事件, 然后等待业务逻辑处理完成并触发此事件. 
+WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
 Work Process 将数据收发和数据处理分离开来，这样即使 PHP 层的某个数据处理将 Work Process   阻塞了一段时间，也不会对其他数据收发产生影响.
 
-WorkThread <=> Work Process 整个过程类似 同步 I/O 模拟的 Proactor 模式: 
+WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
-<img src="https://tech.youzan.com/content/images/2017/04/11.png" width="450px;">
+<img src="https://paprika-dev.b0.upaiyun.com/I6xxnpwbdNXGl5kuqcCSKV8QkWQPbfve0I5FOm5u.jpeg" width="450px;">
 
-从整体上看 Master Process + Work Process 类似于 Nginx + php-FPM . 
+从整体上看 Master Process + Work Process 的架构类似于 Nginx + php-FPM . 
 
 <img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="450px;">
 
-Swoole 的进程间通信
+总结一下 Swoole 的进程间通信
 
 <img src="https://paprika-dev.b0.upaiyun.com/5zXMb0l35WtYXpAaqn1VPbkxaCijNB7xRNkntuX5.png" width="600px;">
 
@@ -254,6 +244,8 @@ Swoole 的进程间通信
 
 [百万 Go TCP 连接的思考2: 百万连接的吞吐率和延迟](https://colobu.com/2019/02/27/1m-go-tcp-connection-2/)
 [Benchmark for implementation of servers that support 1m connections](https://github.com/smallnest/1m-go-tcp-server)
+
+文章和源码包含以下内容:
 
 8_server_workerpool: use **Reactor** pattern to implement multiple event loops
 
@@ -267,9 +259,12 @@ Swoole 的进程间通信
 
 13_cpu_intensive_goroutine: an cpu-bound goroutines per connection server
 
+
+<br>
+
+
 *参考*
 
 [tracymacding 的 gitbook](https://tracymacding.gitbooks.io/implementation-of-golang/content/)
 
 [异步网络模型](https://tech.youzan.com/yi-bu-wang-luo-mo-xing/)
-
