@@ -15,7 +15,7 @@
 
 **OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatching 和 lua 语言的协程特性 实现的:
 
-<img src="https://paprika-dev.b0.upaiyun.com/HLcw2ecSy1BfRzNTm16uoIpfD9X5HC5lr30BlWqm.png">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
 
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
 当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
@@ -210,7 +210,7 @@ sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获�
 
 **Swoole**
 
-<img src="https://paprika-dev.b0.upaiyun.com/3jmpVbIhs7Z7APifAOYLgR0hwBmbDBcvAUC8lvq1.png" width="450px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="450px;">
 
 事件处理模型 Reactor 将I/O事件注册到多路复用器(能维护自己的事件循环, 监听不同的I/O事件)上，一旦有事件触发, 事件分离器就会将其分发到事件处理器中执行事件的处理逻辑.
 
@@ -218,7 +218,7 @@ Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并
 
 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
-<img src="https://paprika-dev.b0.upaiyun.com/9qp6K1dYE0gu7rfqDqG7qr3NqGwhg8o5Ba91EdYY.jpeg" width="450px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="450px;">
 
 WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
 
@@ -228,15 +228,15 @@ Work Process 将数据收发和数据处理分离开来，这样即使 PHP 层�
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
-<img src="https://paprika-dev.b0.upaiyun.com/I6xxnpwbdNXGl5kuqcCSKV8QkWQPbfve0I5FOm5u.jpeg" width="450px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="450px;">
 
 从整体上看 Master Process + Work Process 的架构类似于 Nginx + php-FPM . 
 
-<img src="https://paprika-dev.b0.upaiyun.com/0hDH4Y7no7VHuFaUZoQj76vKZnx2bmzEEpZamEpw.jpeg" width="450px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="450px;">
 
 总结一下 Swoole 的进程间通信
 
-<img src="https://paprika-dev.b0.upaiyun.com/5zXMb0l35WtYXpAaqn1VPbkxaCijNB7xRNkntuX5.png" width="600px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="600px;">
 
 <br>
 
