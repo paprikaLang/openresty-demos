@@ -224,7 +224,7 @@ WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 
 
 WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
-Work Process 将数据收发和数据处理分离开来，这样即使 PHP 层的某个数据处理将 Work Process   阻塞了一段时间，也不会对其他数据收发产生影响.
+Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task底层使用Unix Socket管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
