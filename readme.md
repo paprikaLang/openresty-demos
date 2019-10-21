@@ -129,7 +129,11 @@ func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 }
 ```
 
-netpollinit 要经过 fd_unix.go 中 netFD 的 Init --> fd_poll_runtime.go 中 `pollDesc` 的 init --> netpoll.go 中的 runtime_pollServerInit 一系列方法才能生成 epoll 单例( serverInit.Do ), 然后 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
+netpollinit 要经过:
+fd_unix.go 中 netFD 的 Init --> 
+fd_poll_runtime.go 中 `pollDesc` 的 init --> 
+netpoll.go 中的 runtime_pollServerInit -->
+一系列方法才能生成 epoll 单例( serverInit.Do ), 然后 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
 
 `pollDesc` 是对 netpoll_epoll.go 的封装, 提供统一接口给 net 库使用, 例如 net.go 中的 Read 方法就调用了 netFD 的如下代码:
 
