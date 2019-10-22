@@ -39,13 +39,13 @@ end
 
 以 ngx.sleep 为例:
 
-1. 先增加 ngx_http_lua_sleep_handler 这个回调函数;
+1. 添加 ngx_http_lua_sleep_handler 回调函数;
 
-2. 然后调用 ngx_add_timer 这个 NGINX 提供的接口，向 NGINX 的事件循环中增加一个定时器; 
+2. 然后调用 NGINX 提供的接口 ngx_add_timer ，向 NGINX 的事件循环中增加一个定时器; 
 
-3. 再然后 lua_yield 把 Lua 协程挂起，把控制权交给 NGINX 的事件循环;
+3. lua_yield 将 Lua 协程挂起，并把控制权交给 NGINX 的事件循环;
 
-4. sleep 结束, ngx_http_lua_sleep_handler 被触发了. 它里面调用了 ngx_http_lua_sleep_resume, lua_resume 最后唤醒了 Lua 协程.
+4. sleep 结束后,  ngx_http_lua_sleep_handler 被触发, 它里面会调用 ngx_http_lua_sleep_resume, lua_resume 最后唤醒了 Lua 协程.
 
 ```lua
 static int ngx_http_lua_ngx_sleep(lua_State *L)
