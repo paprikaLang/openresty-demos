@@ -259,6 +259,39 @@ WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 
 
 <br>
 
+最后看看 Swoole 中的协程:
+
+```php
+<?php 
+use Swoole\Coroutine as Co;
+go(function() {
+	// Co::sleep(1);
+	sleep(1);
+	echo "mysql search ...".PHP_EOL;
+});
+echo "main".PHP_EOL;
+go(function() {
+	// Co::sleep(2);
+	sleep(2);
+	echo "redis search ...".PHP_EOL;
+});
+输出结果-------------------------
+Co::sleep():
+// time php go.php
+// main
+// mysql search ...
+// redis search ...
+// php go.php  0.08s user 0.02s system 4% cpu 2.107 total
+sleep():
+// time php go.php
+// mysql search ...
+// main
+// redis search ...
+// php go.php  0.10s user 0.05s system 4% cpu 3.181 total
+```
+sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
+Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
+
 *注*
 
 [百万 Go TCP 连接的思考2: 百万连接的吞吐率和延迟](https://colobu.com/2019/02/27/1m-go-tcp-connection-2/)
