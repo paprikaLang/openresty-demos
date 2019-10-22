@@ -13,6 +13,8 @@
 
 <br>
 
+# OpenResty
+
 **OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
@@ -38,6 +40,8 @@ end
 <br>
 
 <br>
+
+# Golang
 
 **Golang** 在 linux 上通过 runtime 包中的 netpoll_epoll.go 也实现了底层的 event dispatcher .
 
@@ -227,6 +231,8 @@ golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查�
 
 <br>
 
+# Swoole
+
 **Swoole**
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="450px;">
@@ -293,6 +299,8 @@ sleep():
 sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
 
 Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
+
+<br>
 
 *注*
 
