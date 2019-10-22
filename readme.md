@@ -1,10 +1,10 @@
-> linux一般使用non-blocking IO提高IO并发度。当IO并发度很低时，non-blocking IO不一定比blocking IO更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于多个线程协作的non-blocking IO。但当IO并发度愈发提高时，blocking IO阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个cpu core上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache没得到充分利用，另外大量的线程会使得依赖thread-local加速的代码性能明显下降，如tcmalloc，一旦malloc变慢，程序整体性能往往也会随之下降。
+> linux一般使用 non-blocking IO 提高 IO 并发度。当IO并发度很低时，non-blocking IO 不一定比 blocking IO 更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于多个线程协作的 non-blocking IO。但当 IO 并发度愈发提高时，blocking IO 阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个 cpu core 上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache 没得到充分利用，另外大量的线程会使得依赖 thread-local 加速的代码性能明显下降，如 tcmalloc ，一旦 malloc 变慢，程序整体性能往往也会随之下降。
 
 []()
-> 而non-blocking IO一般由少量eventdispatcher线程和一些运行用户逻辑的worker线程组成，这些线程往往会被复用（换句话说调度工作转移到了用户态），event dispatcher和worker可以同时在不同的核运行（流水线化），内核不用频繁的切换就能完成有效的工作。线程总量也不用很多，所以对thread-local的使用也比较充分。这时候non-blocking IO就往往比blocking IO快了。不过non-blocking IO也有自己的问题，它需要调用更多系统调用，比如epoll_ctl，由于epoll实现为一棵红黑树，epoll_ctl并不是一个很快的操作，特别在多核环境下，依赖epoll_ctl的实现往往会面临棘手的扩展性问题。non-blocking需要更大的缓冲，否则就会触发更多的事件而影响效率。non-blocking还得解决不少多线程问题，代码比blocking复杂很多。
+> 而 non-blocking IO 一般由少量 event dispatcher 线程和一些运行用户逻辑的 worker 线程组成，这些线程往往会被复用（换句话说调度工作转移到了用户态），event dispatcher 和 worker 可以同时在不同的核运行（流水线化），内核不用频繁的切换就能完成有效的工作。线程总量也不用很多，所以对 thread-local 的使用也比较充分。这时候 non-blocking IO 就往往比 blocking IO 快了。不过 non-blocking IO 也有自己的问题，它需要调用更多系统调用，比如epoll_ctl，由于 epoll 实现为一棵红黑树，epoll_ctl 并不是一个很快的操作，特别在多核环境下，依赖 epoll_ctl 的实现往往会面临棘手的扩展性问题。non-blocking 需要更大的缓冲，否则就会触发更多的事件而影响效率。non-blocking 还得解决不少多线程问题，代码比 blocking 复杂很多。
 
 []()
-> asynchronous IO: 无需负责读写，把buffer提交给内核后,内核会把数据从内核拷贝到用户态，然后告诉你已可读.
+> asynchronous IO: 无需负责读写，把 buffer 提交给内核后,内核会把数据从内核拷贝到用户态，然后告诉你已可读.
 
    ---   [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
@@ -16,6 +16,8 @@
 **OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
+
+<img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg">
 
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
 当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
@@ -42,7 +44,7 @@ end
 ```go
 // +build linux
 package runtime
-func epollcreate(size int32) int32 //等价于glibc的epoll_create1和 epoll_create
+func epollcreate(size int32) int32 // 等价于glibc的 epoll_create1 和 epoll_create
 func epollcreate1(flags int32) int32
 func epollctl(epfd, op, fd int32, ev *epollevent) int32
 func epollwait(epfd int32, ev *epollevent, nev, timeout int32) int32
@@ -139,7 +141,7 @@ netpoll.go 中的 runtime_pollServerInit -->
 
 一系列方法才能生成 epoll 单例( serverInit.Do ), 然后 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
 
-`pollDesc` 是对 netpoll_epoll.go 的封装, 提供统一接口给 net 库使用, 例如 net.go 中的 Read 方法就调用了 netFD 的如下代码:
+pollDesc 是 netFD 内部一个非常重要的数据结构，它是底层事件驱动 `netpoll_epoll.go` 的封装, 提供统一接口给 net 库使用, 例如: 
 
 ```go
 for {
@@ -160,6 +162,9 @@ for {
 	return n, err
 }
 ```
+
+对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前协程, 直到这个 netFD 上再次发生读写事件，才将此 goroutine 激活并重新运行. 显然，在底层通知 goroutine 再次发生读写等事件就是依靠 epoll 的事件驱动机制.
+
 ```go
 func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	err := netpollcheckerr(pd, int32(mode))
@@ -212,7 +217,13 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; findrunnable 在调用 schedule() 时触发; golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
+sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; 
+
+findrunnable 在调用 schedule() 时触发; 
+
+golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 
+
+这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
 
 <br>
 
@@ -232,7 +243,7 @@ WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 
 
 WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
-Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task底层使用Unix Socket管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
+Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task 底层使用 Unix Socket 管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
