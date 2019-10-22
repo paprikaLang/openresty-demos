@@ -17,7 +17,7 @@
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
 
-<img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="300">
+<img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="700">
 
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
 当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
