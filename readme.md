@@ -24,6 +24,19 @@
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
 当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
 
+```lua
+local sock, err = ngx.socket.tcp()
+
+if err then
+	-- log
+else
+	sock:settimeout(5000)
+	local ok, err = sock:connect('127.0.0.1',13370)  -- nc -l 13370 开启一个 TCP server
+	local bytes, err = sock:send('paprikaLang')
+	ngx.say(bytes)
+end
+```
+
 以 ngx.sleep 为例:
 
 1. 先增加 ngx_http_lua_sleep_handler 这个回调函数;
@@ -41,20 +54,6 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 	ngx_add_timer(&coctx->sleep, (ngx_msec_t) delay);
 	return lua_yield(L, 0);
 }
-```
-
-
-```lua
-local sock, err = ngx.socket.tcp()
-
-if err then
-	-- log
-else
-	sock:settimeout(5000)
-	local ok, err = sock:connect('127.0.0.1',13370)  -- nc -l 13370 开启一个 TCP server
-	local bytes, err = sock:send('paprikaLang')
-	ngx.say(bytes)
-end
 ```
 
 如果 Lua 代码中没有 I/O 或者 sleep 操作，而全是加解密运算这样的CPU密集型任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
