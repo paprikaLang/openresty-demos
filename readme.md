@@ -101,9 +101,9 @@ retry:
 			mode += 'w'
 		}
 		if mode != 0 {
-			// 将event.data 转成*pollDesc类型
+			// 将 event.data 转成 *pollDesc 类型
 			pd := *(**pollDesc)(unsafe.Pointer(&ev.data))
-			// 再调用netpoll.go中的netpollready函数
+			// 再调用 netpoll.go 中的 netpollready 函数
 			netpollready(&gp, pd, mode)
 		}
 	}
@@ -163,7 +163,7 @@ for {
 }
 ```
 
-对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前协程, 直到这个 netFD 上再次发生读写事件，才将此 goroutine 激活并重新运行. 显然，在底层通知 goroutine 再次发生读写等事件就是依靠 epoll 的事件驱动机制.
+对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前 goroutine . 直到这个 netFD 上再次发生读写事件，才将此 goroutine 激活并重新运行. 显然，在底层通知 goroutine 再次发生读写等事件就是依靠 epoll 的事件驱动机制.
 
 ```go
 func poll_runtime_pollWait(pd *pollDesc, mode int) int {
