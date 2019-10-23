@@ -56,7 +56,7 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 }
 ```
 
-如果 Lua 代码中没有 I/O 或者 sleep 操作，而全是加解密运算这样的CPU密集型任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
+如果代码中没有 I/O 或者 ngx.sleep(0) 操作，而全是加解密运算这样的CPU密集型任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
 
 <br>
 
