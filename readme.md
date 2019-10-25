@@ -258,39 +258,6 @@ golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查�
 
 # Swoole
 
-**Swoole**
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="450px;">
-
-事件处理模型 Reactor 将I/O事件注册到多路复用器(能维护自己的事件循环, 监听不同的I/O事件)上，一旦有事件触发, 事件分离器就会将其分发到事件处理器中执行事件的处理逻辑.
-
-Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 注册事件等待触发 -> 分发 -> 处理 这样的模式运行.
-
-Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="450px;">
-
-WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
-
-WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
-
-Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task 底层使用 Unix Socket 管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
-
-WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="450px;">
-
-从整体上看 Master Process + Work Process 的架构类似于 Nginx + php-FPM . 
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="450px;">
-
-总结一下 Swoole 的进程间通信
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="600px;">
-
-<br>
-
-最后看看 Swoole 中的协程:
 
 ```php
 <?php 
@@ -324,6 +291,37 @@ sleep():
 sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
 
 Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
+
+**Swoole**
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="450px;">
+
+事件处理模型 Reactor 将I/O事件注册到多路复用器(能维护自己的事件循环, 监听不同的I/O事件)上，一旦有事件触发, 事件分离器就会将其分发到事件处理器中执行事件的处理逻辑.
+
+Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 注册事件等待触发 -> 分发 -> 处理 这样的模式运行.
+
+Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="450px;">
+
+WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
+
+WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
+
+Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task 底层使用 Unix Socket 管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
+
+WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="450px;">
+
+从整体上看 Master Process + Work Process 的架构类似于 Nginx + php-FPM . 
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="450px;">
+
+总结一下 Swoole 的进程间通信
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="600px;">
+
 
 <br>
 
