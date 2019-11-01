@@ -166,7 +166,35 @@ netpoll.go 中的 runtime_pollServerInit -->
 
 一系列方法才能生成 epoll 单例( serverInit.Do ), 然后 runtime_pollOpen 会把 fd 添加到 epoll 事件队列中. 
 
-pollDesc 是 netFD 内部一个非常重要的数据结构，它是底层事件驱动 `netpoll_epoll.go` 的封装, 提供统一接口给 net 库使用, 例如: 
+pollDesc 是 netFD 内部一个非常重要的数据结构，它是底层事件驱动 `netpoll_epoll.go` 的封装, 提供统一接口给 net 库使用.
+
+```go
+func main() {
+	listen, err := net.Listen("tcp", ":8888") 
+	if err != nil { 
+		fmt.Println("listen error: ", err) 
+		return
+	} 
+	for{
+		conn, err := listen.Accept()
+		if err != nil {
+			fmt.Println("accept error: ", err) 
+			break
+		} 
+		go HandleConn(conn)
+	}
+}
+func HandleConn(conn net.Conn) {
+  defer conn.Close()
+  for {
+  	// read from the connection
+	...
+	// write to the connection
+	...
+  }
+}
+
+```
 
 ```go
 for {
@@ -192,7 +220,7 @@ for {
 
 直到这个 netFD 上再次发生读写事件，才会将此 goroutine 激活并重新运行. 
 
-显然，在底层通知 goroutine 再次发生读写事件就是通过 epoll 的事件驱动机制实现的.
+显然，在底层通知 goroutine 再次发生读写事件的, 就是 epoll 的事件驱动机制.
 
 ```go
 func poll_runtime_pollWait(pd *pollDesc, mode int) int {
