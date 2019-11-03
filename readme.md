@@ -126,12 +126,13 @@ retry:
 			mode += 'w'
 		}
 		if mode != 0 {
-			// 将 event.data 转成 *pollDesc 类型
+			// 将 event.data 转成 *pollDesc 类型, pd主要记录了与该socket关联的等待协程
 			pd := *(**pollDesc)(unsafe.Pointer(&ev.data))
-			// 再调用 netpoll.go 中的 netpollready 函数
+			// 再调用 netpoll.go 中的 netpollready 函数, 返回一个已经就绪的协程(g)链表
 			netpollready(&gp, pd, mode)
 		}
 	}
+	// 如果调用者同步等待且本次未获取到就绪 socket , 继续重试
 	if block && gp == 0 {
 		goto retry
 	}
@@ -169,14 +170,24 @@ netpoll.go 中的 runtime_pollServerInit -->
 pollDesc 是 netFD 内部一个非常重要的数据结构，它是底层事件驱动 `netpoll_epoll.go` 的封装, 提供统一接口给 net 库使用.
 
 ```go
+func Listen(net, laddr string) (Listener, error)
+func (*TCPListener) Accept (c Conn, err error)
+func (c *conn) Read(b []byte) (int, error)
+func (c *conn) Write(b []byte) (int, error)
+type TCPListener struct {
+    fd *netFD
+}
+```
+
+```go
 func main() {
-	listen, err := net.Listen("tcp", ":8888") 
+	listener, err := net.Listen("tcp", ":8888") 
 	if err != nil { 
 		fmt.Println("listen error: ", err) 
 		return
 	} 
 	for{
-		conn, err := listen.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("accept error: ", err) 
 			break
@@ -195,24 +206,35 @@ func HandleConn(conn net.Conn) {
 }
 
 ```
+```go
+
+func (fd *netFD) accept() (netfd *netFD, err error) {
+	netfd, err = newFD(s, fd.family, fd.sotype, fd.net)
+	... ...
+	// 这个前面已经分析，将该fd添加到epoll队列中
+	err = netfd.init()
+}
+```
 
 ```go
-for {
-	 // 系统调用Read读取数据
-	n, err := syscall.Read(fd.Sysfd, p)
-	if err != nil {
-		n = 0
-		// 处理EAGAIN类型的错误，其他错误一律返回给调用者
-		if err == syscall.EAGAIN && fd.pd.pollable() {
-			// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
-			// waitRead 方法最终调用的是接口: runtime_pollWait
-			if err = fd.pd.waitRead(fd.isFile); err == nil {
-				continue
+func (fd *netFD) Read(p []byte) (n int, err error) {
+	for {
+		 // 系统调用Read读取数据
+		n, err := syscall.Read(fd.Sysfd, p)
+		if err != nil {
+			n = 0
+			// 处理EAGAIN类型的错误，其他错误一律返回给调用者
+			if err == syscall.EAGAIN && fd.pd.pollable() {
+				// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
+				// waitRead 方法最终调用的是接口: runtime_pollWait
+				if err = fd.pd.waitRead(fd.isFile); err == nil {
+					continue
+				}
 			}
 		}
+		err = fd.eofError(n, err)
+		return n, err
 	}
-	err = fd.eofError(n, err)
-	return n, err
 }
 ```
 
@@ -228,8 +250,9 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if err != 0 {
 		return err
 	}
-	// netpollblock返回值如果为true，表示是有读写事件发生, g被唤醒(netpollready), 可以 continue Read 了
-	for !netpollblock(pd, int32(mode), false) {
+	//如果返回true，表示是有读写事件发生, g被唤醒(netpollready), 可以 continue Read 了
+	for !netpollblock(pd, int32(mode), false) { 
+		//如果返回false,而且是超时错误就返回给应用程序, 如果是其他错误则继续进入 netpollblock 阻塞当前协程
 		err = netpollcheckerr(pd, int32(mode))
 		if err != 0 {
 			return err
@@ -259,8 +282,8 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
             break
         }
     }
-    // gopark会阻塞当前协程g, gopark阻塞g之前，先调用了netpollblockcommit
-    // 该函数将pd.rg从pdWait变成g的地址, 为了在收到IO事件时知道该唤醒哪条协程:
+    // gopark会阻塞当前协程g, gopark阻塞g之前，传入的函数指针netpollblockcommit
+    // 会将pd.rg从pdWait变成g的地址, 这是为了在收到IO事件时就知道该唤醒哪条协程:
     // casuintptr((*uintptr)(gpp), pdWait,  uintptr(unsafe.Pointer(gp)))
     if waitio || netpollcheckerr(pd, mode) == 0 {
         gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
