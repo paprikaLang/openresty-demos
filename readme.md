@@ -68,16 +68,6 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 
 ```go
 // +build linux
-package runtime
-func epollcreate(size int32) int32 // 等价于glibc的 epoll_create1 和 epoll_create
-func epollcreate1(flags int32) int32
-func epollctl(epfd, op, fd int32, ev *epollevent) int32
-func epollwait(epfd int32, ev *epollevent, nev, timeout int32) int32
-
-var (
-	epfd int32 = -1 // epoll descriptor
-)
-// to initialize the poller
 func netpollinit() { 
 	epfd = epollcreate1(_EPOLL_CLOEXEC)
 	if epfd >= 0 {
@@ -100,39 +90,21 @@ func netpollopen(fd uintptr, pd *pollDesc) int32 {
 }
 // returns list of goroutines that become runnable
 func netpoll(block bool) *g {
-
 	var events [128]epollevent
 retry:
-    // epollwait 返回的n个event事件
 	n := epollwait(epfd, &events[0], int32(len(events)), waitms)
-	if n < 0 {
-		if n != -_EINTR {
-			println("runtime: epollwait on fd", epfd, "failed with", -n)
-			throw("runtime: netpoll failed")
-		}
-		goto retry
-	}
+	... ...
 	var gp guintptr
 	for i := int32(0); i < n; i++ {
 		ev := &events[i]
-		if ev.events == 0 {
-			continue
-		}
-		var mode int32
-		if ev.events&(_EPOLLIN|_EPOLLRDHUP|_EPOLLHUP|_EPOLLERR) != 0 {
-			mode += 'r'
-		}
-		if ev.events&(_EPOLLOUT|_EPOLLHUP|_EPOLLERR) != 0 {
-			mode += 'w'
-		}
+		... ...
 		if mode != 0 {
-			// 将 event.data 转成 *pollDesc 类型, pd主要记录了与该socket关联的等待协程
+			// 将 event.data 转成 *pollDesc 类型, pd主要记录了与该socket关联的等待的协程
 			pd := *(**pollDesc)(unsafe.Pointer(&ev.data))
 			// 再调用 netpoll.go 中的 netpollready 函数, 返回一个已经就绪的协程(g)链表
 			netpollready(&gp, pd, mode)
 		}
 	}
-	// 如果调用者同步等待且本次未获取到就绪 socket , 继续重试
 	if block && gp == 0 {
 		goto retry
 	}
@@ -148,7 +120,7 @@ func netpollready(gpp *guintptr, pd *pollDesc, mode int32) {
 		// IO事件唤醒协程, 如果true改成false表示超时唤醒
 		rg.set(netpollunblock(pd, 'r', true))
 	}
-	// wg 与 rg 逻辑相同, 代码省略
+	... ...
 	if rg != 0 {
 		// 将就绪协程添加至链表中
 		rg.ptr().schedlink = *gpp
@@ -180,6 +152,107 @@ type TCPListener struct {
 ```
 
 ```go
+
+func (fd *netFD) accept() (netfd *netFD, err error) {
+	netfd, err = newFD(s, fd.family, fd.sotype, fd.net)
+	... ...
+	// 这个前面已经分析，将该fd添加到epoll队列中
+	err = netfd.init()
+}
+```
+
+```go
+func (fd *netFD) Read(p []byte) (n int, err error) {
+	for {
+		n, err := syscall.Read(fd.Sysfd, p)
+		if err != nil {
+			n = 0
+			// 处理EAGAIN类型的错误，其他错误一律返回给调用者
+			if err == syscall.EAGAIN && fd.pd.pollable() {
+				// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
+				// waitRead 最终调用的接口是: runtime_pollWait
+				if err = fd.pd.waitRead(fd.isFile); err == nil {
+					continue
+				}
+			}
+		}
+		err = fd.eofError(n, err)
+		return n, err
+	}
+}
+```
+
+对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前 goroutine . 
+
+直到这个 netFD 上再次发生读写事件，才会将此 goroutine 激活并重新运行. 
+
+而在底层通知 goroutine 再次发生读写事件的, 正是 epoll 的事件驱动机制.
+
+```go
+func poll_runtime_pollWait(pd *pollDesc, mode int) int {
+	err := netpollcheckerr(pd, int32(mode))
+	if err != 0 {
+		return err
+	}
+	//如果返回true，表示是有读写事件发生, g被唤醒
+	for !netpollblock(pd, int32(mode), false) { 
+		//如果返回false,而且是超时错误就返回给应用程序, 如果是其他错误则继续进入 netpollblock 阻塞当前协程
+		err = netpollcheckerr(pd, int32(mode))
+		if err != 0 {
+			return err
+		}
+	}
+	return 0
+}
+```
+```go
+func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
+    gpp := &pd.rg
+    if mode == 'w' {
+        gpp = &pd.wg
+    }
+    for {
+        old := *gpp
+        if old == pdReady {
+            *gpp = 0
+            return true
+        }
+        if old != 0 {
+            throw("netpollblock: double wait")
+        }
+	// 参考 atomic.Store 的实现: if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0)))
+        // 个人猜想casuintptr也应该是一个 CAS, 它可以追踪 gpp 在 netpollunblock 中的变化: 当gpp=0时代表此时没有协程在对这个netFD消费
+	// 当前协程可以将gpp设置为pdWait了. 此过程类似于一个加锁的效果.
+        if casuintptr(gpp, 0, pdWait) {
+            break
+        }
+    }
+    // gopark会阻塞当前协程g, 在此之前
+    // 传入的函数指针 netpollblockcommit: casuintptr((*uintptr)(gpp), pdWait,  uintptr(unsafe.Pointer(gp)))
+    // 会将pd.rg从pdWait换成g的地址, 这是为了在netpollunblock时知道该唤醒哪条协程(return (*g)(unsafe.Pointer(old))):
+    if waitio || netpollcheckerr(pd, mode) == 0 {
+        //gopark调用了mcall，mcall用汇编实现，作用就是把g挂起，然后执行其他可执行的goroutine.
+        gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
+    }
+    // atomic_xchg: 先获取gpp当前状态记录在old中,再 *gpp = 0
+    old := atomic.Xchguintptr(gpp, 0)
+    if old > pdWait {
+        throw("netpollblock: corrupted state")
+    }
+    return old == pdReady
+}
+```
+
+sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; 
+
+findrunnable 在调用 schedule() 时触发; 
+
+golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 
+
+这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
+
+
+```go
 func main() {
 	listener, err := net.Listen("tcp", ":8888") 
 	if err != nil { 
@@ -206,104 +279,6 @@ func HandleConn(conn net.Conn) {
 }
 
 ```
-```go
-
-func (fd *netFD) accept() (netfd *netFD, err error) {
-	netfd, err = newFD(s, fd.family, fd.sotype, fd.net)
-	... ...
-	// 这个前面已经分析，将该fd添加到epoll队列中
-	err = netfd.init()
-}
-```
-
-```go
-func (fd *netFD) Read(p []byte) (n int, err error) {
-	for {
-		 // 系统调用Read读取数据
-		n, err := syscall.Read(fd.Sysfd, p)
-		if err != nil {
-			n = 0
-			// 处理EAGAIN类型的错误，其他错误一律返回给调用者
-			if err == syscall.EAGAIN && fd.pd.pollable() {
-				// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
-				// waitRead 方法最终调用的是接口: runtime_pollWait
-				if err = fd.pd.waitRead(fd.isFile); err == nil {
-					continue
-				}
-			}
-		}
-		err = fd.eofError(n, err)
-		return n, err
-	}
-}
-```
-
-对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前 goroutine . 
-
-直到这个 netFD 上再次发生读写事件，才会将此 goroutine 激活并重新运行. 
-
-显然，在底层通知 goroutine 再次发生读写事件的, 就是 epoll 的事件驱动机制.
-
-```go
-func poll_runtime_pollWait(pd *pollDesc, mode int) int {
-	err := netpollcheckerr(pd, int32(mode))
-	if err != 0 {
-		return err
-	}
-	//如果返回true，表示是有读写事件发生, g被唤醒(netpollready), 可以 continue Read 了
-	for !netpollblock(pd, int32(mode), false) { 
-		//如果返回false,而且是超时错误就返回给应用程序, 如果是其他错误则继续进入 netpollblock 阻塞当前协程
-		err = netpollcheckerr(pd, int32(mode))
-		if err != 0 {
-			return err
-		}
-	}
-	return 0
-}
-```
-```go
-func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
-    gpp := &pd.rg
-    if mode == 'w' {
-        gpp = &pd.wg
-    }
-    // 将pd.rg设为pdWait, casuintptr使用了自旋锁, for循环防止赋值失败
-    for {
-        old := *gpp
-        if old == pdReady {
-            *gpp = 0
-            return true
-        }
-        if old != 0 {
-            throw("netpollblock: double wait")
-        }
-        // 如果成功，跳出循环
-        if casuintptr(gpp, 0, pdWait) {
-            break
-        }
-    }
-    // gopark会阻塞当前协程g, gopark阻塞g之前，传入的函数指针netpollblockcommit
-    // 会将pd.rg从pdWait变成g的地址, 这是为了在收到IO事件时就知道该唤醒哪条协程:
-    // casuintptr((*uintptr)(gpp), pdWait,  uintptr(unsafe.Pointer(gp)))
-    if waitio || netpollcheckerr(pd, mode) == 0 {
-        gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
-    }
-    // 可能是被挂起的协程被唤醒或者由于某些原因该协程压根未被挂起,获取其当前状态记录在old中
-    old := xchguintptr(gpp, 0)
-    if old > pdWait {
-        throw("netpollblock: corrupted state")
-    }
-    return old == pdReady
-}
-```
-
-sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; 
-
-findrunnable 在调用 schedule() 时触发; 
-
-golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 
-
-这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
 
 <br>
 
