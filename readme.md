@@ -17,7 +17,7 @@
 
 **OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
-<img src="/imgs/epoll1.png">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
 
 <img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="700">
 
