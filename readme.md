@@ -361,6 +361,4 @@ WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 
 
 *参考*
 
-[tracymacding 的 gitbook](https://tracymacding.gitbooks.io/implementation-of-golang/content/)
 
-[异步网络模型](https://tech.youzan.com/yi-bu-wang-luo-mo-xing/)
