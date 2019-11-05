@@ -126,7 +126,7 @@ fd_poll_runtime.go 中 `pollDesc` 的 init -->
 
 netpoll.go 中的 runtime_pollServerInit -->
 
-一系列方法生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 并通过 runtime_pollOpen 把 fd 添加到 epoll 事件队列中. 
+一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将 fd 添加到 epoll 事件队列中. 
 
 ```go
 func main() {
@@ -158,13 +158,6 @@ func HandleConn(conn net.Conn) {
 		conn.Write(buf[:n])
 	}
 }
-```
-
-```go
-func Listen(net, laddr string) (Listener, error)
-func (*TCPListener) Accept (c Conn, err error)
-func (c *conn) Read(b []byte) (int, error)
-func (c *conn) Write(b []byte) (int, error)
 ```
 
 ```go
