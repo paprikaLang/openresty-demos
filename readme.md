@@ -92,7 +92,7 @@ func netpoll(block bool) *g {                      // 对应 epollwait
 		... ...
 		if mode != 0 {
 			pd := *(**pollDesc)(unsafe.Pointer(&ev.data))
-			// 再调用 netpoll.go 中的 netpollready 函数, 返回一个已经就绪的协程(g)链表
+			// 再调用 netpoll.go 中的 netpollready 函数, 返回一个已经就绪的协程链表
 			netpollready(&gp, pd, mode)
 		}
 	} 
@@ -126,7 +126,7 @@ fd_poll_runtime.go 中 `pollDesc` 的 init -->
 
 netpoll.go 中的 runtime_pollServerInit -->
 
-一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将 fd 添加到 epoll 事件队列中. 
+一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 epoll 事件队列中来监听连接事件; 一旦有连接事件 accept 进来, 再用连接事件的 fd 监听数据的读写事件.
 
 ```go
 func main() {
@@ -136,7 +136,7 @@ func main() {
 		return
 	} 
 	for{
-		conn, err := listener.Accept() 
+		conn, err := listener.Accept() // accept 和 read 内部原理相似, 通过阻塞协程实现同步编程模式
 		if err != nil {
 			fmt.Println("accept error: ", err) 
 			continue
@@ -159,27 +159,20 @@ func HandleConn(conn net.Conn) {
 	}
 }
 ```
+对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前协程. 
 
-```go
-
-func (fd *netFD) accept() (netfd *netFD, err error) {
-	netfd, err = newFD(s, fd.family, fd.sotype, fd.net)
-	... ...
-	// 这个前面已经分析，将该fd添加到epoll队列中
-	err = netfd.init()
-}
-```
+直到这个 连接fd 上再次发生读写事件(或连接事件)，epoll 会通知此协程重新开始运行. 
 
 ```go
 func (fd *netFD) Read(p []byte) (n int, err error) {
 	for {
-		n, err := syscall.Read(fd.Sysfd, p)  // socketFunc(family, sotype|syscall.SOCK_NONBLOCK...)
+		n, err := syscall.Read(fd.Sysfd, p)  // syscall.SOCK_NONBLOCK
 		if err != nil {
 			n = 0
-			// 处理EAGAIN类型的错误，其他错误一律返回给调用者
 			if err == syscall.EAGAIN && fd.pd.pollable() {
-				// 对于non-blocking IO的文件描述符，如果错误是EAGAIN,说明Socket的缓冲区为空，会阻塞当前协程
-				// waitRead 最终调用的接口是: runtime_pollWait
+
+				// waitRead 最终调用的接口是: runtime_pollWait, gopark解除阻塞之后]]
+
 				if err = fd.pd.waitRead(fd.isFile); err == nil {
 					continue
 				}
@@ -191,19 +184,13 @@ func (fd *netFD) Read(p []byte) (n int, err error) {
 }
 ```
 
-对于non-blocking IO的文件描述符，如果错误是 `EAGAIN` ,说明 Socket 的缓冲区为空，会阻塞当前 goroutine . 
-
-直到这个 netFD 上再次发生读写事件，才会将此 goroutine 激活并重新运行. 
-
-而在底层通知 goroutine 再次发生读写事件的, 正是 epoll 的事件驱动机制.
-
 ```go
 func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	err := netpollcheckerr(pd, int32(mode))
 	if err != 0 {
 		return err
 	}
-	//如果返回true，表示是有读写事件发生, g被唤醒
+	//如果返回true，表示是有读写事件发生
 	for !netpollblock(pd, int32(mode), false) { 
 		//如果返回false,而且是超时错误就返回给应用程序, 如果是其他错误则继续进入 netpollblock 阻塞当前协程
 		err = netpollcheckerr(pd, int32(mode))
@@ -214,6 +201,7 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	return 0
 }
 ```
+
 ```go
 func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
     gpp := &pd.rg
@@ -229,18 +217,16 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
         if old != 0 {
             throw("netpollblock: double wait")
         }
-	// 参考 atomic.Store 的实现: if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0)))
-        // 个人猜想casuintptr也应该是一个 CAS, 当 gpp=0 代表此时没有协程在对这个netFD消费
-	// 当前协程可以将gpp设置为pdWait了. 此过程类似于一个加锁的效果.
+        // CAS原子操作, 一种乐观锁: 当 gpp=0 时 将gpp设置为pdWait. 针对连接事件的惊群效应?
         if atomic.Casuintptr(gpp, 0, pdWait) {
             break
         }
     }
-    // gopark会阻塞当前协程g, 在此之前
+    // gopark会阻塞当前协程, 在此之前
     // 传入的函数指针 netpollblockcommit: casuintptr((*uintptr)(gpp), pdWait,  uintptr(unsafe.Pointer(gp)))
-    // 会将pd.rg从pdWait换成g的地址, 这是为了在netpollunblock时知道该唤醒哪条协程(return (*g)(unsafe.Pointer(old))):
+    // 会将pd.rg从pdWait换成当前协程的地址, 这是为了在netpollunblock时知道该唤醒哪条协程(return (*g)(unsafe.Pointer(old))).
     if waitio || netpollcheckerr(pd, mode) == 0 {
-        //gopark调用了mcall，mcall用汇编实现，作用就是把g挂起.
+        //gopark调用了mcall，mcall用汇编实现，作用就是把协程挂起.
         gopark(netpollblockcommit, unsafe.Pointer(gpp), "IO wait", traceEvGoBlockNet, 5)
     }
     // atomic_xchg先获取gpp当前状态记录在old中,再 *gpp = 0
@@ -252,16 +238,12 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-sysmon 是 golang 中的监控协程，可以周期性调用 netpoll(false) 获取就绪的协程 g链表; 
+go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 以同步的方式编写异步逻辑.
 
-findrunnable 在调用 schedule() 时触发; 
+但是在海量连接并且活跃连接占比又很低的场景下, 这种模式会耗费大量资源, 性能也会因此降低. 
 
-golang 做完 gc 后也会调用 runtime·startTheWorldWithSema(void) 来检查是否有网络事件阻塞. 
+看官可以通过模拟餐厅的场景, 对应上 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 之间的联系, 来形象一点看问题.
 
-这三种场景最终都会调用 injectglist() 来把阻塞的协程列表插入到全局的可运行g队列, 在下次调度时等待执行.
-
-
-以上原理使得golang能以简洁易用的同步模式, 借助 go scheduler 的高效调度, 编写异步逻辑. 但是在海量连接场景下并且活跃连接占比又很低时, 这种 `goroutine-per-connenction` 的模式就会产生耗费资源, 低效
 
 
 
