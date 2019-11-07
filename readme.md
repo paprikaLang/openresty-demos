@@ -32,7 +32,7 @@ if err then
 else
 	sock:settimeout(5000)
 	local ok, err = sock:connect('127.0.0.1',13370)  -- nc -l 13370 开启一个 TCP server
-	local bytes, err = sock:send('paprikaLang')
+	local bytes, err = sock:send('paprikaLang')      -- 同步编程模式简单易用
 	ngx.say(bytes)
 end
 ```
@@ -56,7 +56,43 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 }
 ```
 
-如果代码中没有 I/O 或者 ngx.sleep(0) 操作，而全是加解密运算这样的CPU密集型任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
+如果代码中没有 I/O 操作，而全是加解密CPU运算这样的任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
+
+用一个 swoole 的例子来看 IO密集型任务和CPU密集型任务的区别:
+
+
+```php
+<?php 
+use Swoole\Coroutine as Co;
+go(function() {
+	// Co::sleep(1);
+	sleep(1);
+	echo "mysql search ...".PHP_EOL;
+});
+echo "main".PHP_EOL;
+go(function() {
+	// Co::sleep(2);
+	sleep(2);
+	echo "redis search ...".PHP_EOL;
+});
+输出结果-------------------------
+Co::sleep():
+// time php go.php
+// main
+// mysql search ...
+// redis search ...
+// php go.php  0.08s user 0.02s system 4% cpu 2.107 total
+sleep():
+// time php go.php
+// mysql search ...
+// main
+// redis search ...
+// php go.php  0.10s user 0.05s system 4% cpu 3.181 total
+```
+
+sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
+
+Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
 
 <br>
 
@@ -126,7 +162,9 @@ fd_poll_runtime.go 中 `pollDesc` 的 init -->
 
 netpoll.go 中的 runtime_pollServerInit -->
 
-一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 epoll 事件队列中来监听连接事件; 一旦有连接事件 accept 进来, 再用连接事件的 fd 监听数据的读写事件.
+一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 
+
+epoll 事件队列中来等待连接事件; 一旦有连接事件 accept 进来, 再用连接事件的 fd 监听数据的读写事件.
 
 ```go
 func main() {
@@ -242,50 +280,114 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 
 但是在海量连接并且活跃连接占比又很低的场景下, 这种模式会耗费大量资源, 性能也会因此降低. 
 
-看官可以通过模拟餐厅的场景, 对应上 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 之间的联系, 来形象一点看问题.
+看官可以通过模拟餐厅高峰期时的场景, 对应上 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 之间的联系, 来想一想如何提高效率节省开支.
 
+<br>
 
+## GNET
+
+<br>
+
+```go
+func (svr *server) activateMainReactor() {
+	defer svr.signalShutdown()
+	_ = svr.mainLoop.poller.Polling(func(fd int, ev uint32, job internal.Job) error {
+		return svr.acceptNewConnection(fd)
+	})
+}
+
+func (p *Poller) Polling(callback func(fd int, ev uint32, job internal.Job) error) (err error) {
+	... ...
+	for {
+		n, err0 := unix.EpollWait(p.fd, el.events, -1)
+		... ...
+		for i := 0; i < n; i++ {
+			if fd := int(el.events[i].Fd); fd != p.wfd {
+				if err = callback(fd, el.events[i].Events, nil); err != nil {
+					return
+				}
+			} ... ...
+		}
+		... ...
+	}
+}
+
+func (svr *server) acceptNewConnection(fd int) error {
+	nfd, sa, err := unix.Accept(fd)
+	if err != nil {
+		if err == unix.EAGAIN {
+			return nil
+		}
+		return err
+	}
+	if err := unix.SetNonblock(nfd, true); err != nil {
+		return err
+	}
+	lp := svr.subLoopGroup.next() //分配一个subReactor
+	c := newConn(nfd, lp, sa)
+	_ = lp.poller.Trigger(func() (err error) {
+		if err = lp.poller.AddRead(nfd); err != nil { //AddRead 内部调用了subReactor epoll 的 unix.EpollCtl
+			return
+		}
+		lp.connections[nfd] = c
+		err = lp.loopOpen(c)
+		return
+	})
+	return nil
+}
+
+func (svr *server) startReactors() {
+	svr.subLoopGroup.iterate(func(i int, lp *loop) bool {
+		svr.wg.Add(1)
+		go func() {
+			svr.activateSubReactor(lp)
+			svr.wg.Done()
+		}()
+		return true
+	})
+}
+
+func (svr *server) activateSubReactor(lp *loop) {
+	... ...
+	_ = lp.poller.Polling(func(fd int, ev uint32, job internal.Job) error {
+		if c, ack := lp.connections[fd]; ack {
+			switch c.outboundBuffer.IsEmpty() {
+			case false:
+				if ev&netpoll.OutEvents != 0 {
+					return lp.loopOut(c)
+				}
+				return nil
+			case true:
+				if ev&netpoll.InEvents != 0 {
+					return lp.loopIn(c)
+				}
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (lp *loop) loopIn(c *conn) error {
+	... ...
+loopReact:
+	out, action := lp.svr.eventHandler.React(c)
+	if len(out) != 0 {
+		if frame, err := lp.svr.codec.Encode(out); err == nil {
+			c.write(frame)
+		}
+		goto loopReact
+	}
+	... ...
+}
+```
 
 
 <br>
 
 # Swoole
 
-
-```php
-<?php 
-use Swoole\Coroutine as Co;
-go(function() {
-	// Co::sleep(1);
-	sleep(1);
-	echo "mysql search ...".PHP_EOL;
-});
-echo "main".PHP_EOL;
-go(function() {
-	// Co::sleep(2);
-	sleep(2);
-	echo "redis search ...".PHP_EOL;
-});
-输出结果-------------------------
-Co::sleep():
-// time php go.php
-// main
-// mysql search ...
-// redis search ...
-// php go.php  0.08s user 0.02s system 4% cpu 2.107 total
-sleep():
-// time php go.php
-// mysql search ...
-// main
-// redis search ...
-// php go.php  0.10s user 0.05s system 4% cpu 3.181 total
-```
-
-sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
-
-Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
-
-**Swoole**
+<br>
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
 
