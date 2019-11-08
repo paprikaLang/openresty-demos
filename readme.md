@@ -22,7 +22,7 @@
 
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
 
-当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理. 这样就以同步的模式实现了异步的代码逻辑.
+当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理. 这样就以同步的模式实现了异步的逻辑.
 
 
 ```lua
@@ -57,9 +57,9 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 }
 ```
 
-如果代码中没有 I/O 操作或者 nginx.sleep(0)，而全是加解密运算，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求也不会交出控制权.
+如果代码中没有 I/O 操作或者 nginx.sleep(0)，而是加解密运算，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求也不会交出控制权.
 
-一个简单的 swoole 协程的示例也可以验证 `IO密集型任务`和 `CPU密集型任务` 的区别:
+一个简单的 swoole 协程的示例也可以验证 `IO密集型任务`和 `CPU密集型任务` 在这方面的差别:
 
 ```php
 <?php 
@@ -76,23 +76,19 @@ go(function() {
 	echo "redis search ...".PHP_EOL;
 });
 输出结果-------------------------
-Co::sleep():
-// time php go.php
-// main
-// mysql search ...
-// redis search ...
-// php go.php  0.08s user 0.02s system 4% cpu 2.107 total
-sleep():
-// time php go.php
-// mysql search ...
-// main
-// redis search ...
-// php go.php  0.10s user 0.05s system 4% cpu 3.181 total
+Co::sleep():模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO 就绪时恢复运行
+> time php go.php
+ main
+ mysql search ...
+ redis search ...
+ php go.php  0.08s user 0.02s system 4% cpu 2.107 total
+sleep(): 可以看做是 CPU密集型任务, 不会引起协程的调度
+> time php go.php
+ mysql search ...
+ main
+ redis search ...
+ php go.php  0.10s user 0.05s system 4% cpu 3.181 total
 ```
-
-sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
-
-Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO 就绪时恢复运行.
 
 <br>
 
@@ -100,16 +96,16 @@ Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让�
 
 <br>
 
-**Golang** 在 linux 系统下也是基于 epoll 实现的网络 IO 系统.
+**Golang** 在 linux 系统下的网络IO系统则是通过 epoll 触发事件唤醒协程 实现了和 openresty 类似的同步模式.
 
 ```go
 // +build linux
-func netpollinit() {                             // 对应 epollcreate1
+func netpollinit() {                                             // 对应 epollcreate1
 	epfd = epollcreate1(_EPOLL_CLOEXEC)  
 	... ...
 }
 // to arm edge-triggered notifications and associate fd with pd
-func netpollopen(fd uintptr, pd *pollDesc) int32 {  //对应 epollctl
+func netpollopen(fd uintptr, pd *pollDesc) int32 {               //对应 epollctl
 	var ev epollevent
 	// _EPOLLRDHUP 解决了对端socket关闭，epoll本身并不能直接感知到这个关闭动作的问题
 	ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET 
@@ -117,7 +113,7 @@ func netpollopen(fd uintptr, pd *pollDesc) int32 {  //对应 epollctl
 	return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &ev)
 }
 // returns list of goroutines that become runnable
-func netpoll(block bool) *g {                      // 对应 epollwait
+func netpoll(block bool) *g {                                    // 对应 epollwait
 	var events [128]epollevent
 	... ...
 	n := epollwait(epfd, &events[0], int32(len(events)), waitms)
@@ -207,10 +203,9 @@ func (fd *netFD) Read(p []byte) (n int, err error) {
 		if err != nil {
 			n = 0
 			if err == syscall.EAGAIN && fd.pd.pollable() {
-
-				// waitRead 最终调用的接口是: runtime_pollWait, gopark解除阻塞之后]]
-
-				if err = fd.pd.waitRead(fd.isFile); err == nil {
+				// waitRead 最终调用的接口是: runtime_pollWait
+				if err = fd.pd.waitRead(fd.isFile); err == nil { 
+					// 协程激活后执行continue, 并重新read数据,这时应该没有err可以成功return了.
 					continue
 				}
 			}
@@ -227,9 +222,8 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if err != 0 {
 		return err
 	}
-	//如果返回true，表示是有读写事件发生
+	//如果返回true，表示是有读写事件发生(old == pdReady)
 	for !netpollblock(pd, int32(mode), false) { 
-		//如果返回false,而且是超时错误就返回给应用程序, 如果是其他错误则继续进入 netpollblock 阻塞当前协程
 		err = netpollcheckerr(pd, int32(mode))
 		if err != 0 {
 			return err
@@ -275,11 +269,11 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 可以和 openresty 一样以同步的方式编写异步逻辑.
+go-net 的 `goroutine-per-connenction` 的模式借助 go scheduler 的高效调度, 以同步的方式编写异步逻辑, 简洁易用.
 
-但是在海量连接并且活跃连接占比又很低的场景下, 这种模式会耗费大量资源, 性能也会因此降低. 
+但是遇到海量连接并且活跃连接占比又很低的情况, 这种模式就会耗费大量资源, 性能上也会随之下降. 
 
-看官可以通过模拟餐厅高峰期时的场景, 对应上 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 之间的联系, 来想一想如何提高效率节省开支.
+看官们可以通过模拟餐厅高峰期时的场景, 将 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 对应上联系, 来想想如何提高效率节省资源.
 
 <br>
 
@@ -291,18 +285,18 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 
 <img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" width="700" />
 
-mainReactor(大堂经理): 利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
+mainReactor(大堂经理):  利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
 
-subReator(服务员): 一个 subReator 可以在自己的 epoll 上监听多个 connection 的读写事件, 事件触发时调用 EventHandler.React 处理.
+subReator(服务员):      一个 subReator 可以在自己的 epoll 上监听多个 connection 的读写事件, 事件触发时调用 EventHandler.React 处理.
 
-worker pool(后厨): 不能及时处理的交给 ants 协程池.
+worker pool(后厨):      不能及时处理的交给 ants 协程池.
 
 ```go
 func (svr *server) activateMainReactor() {
 	defer svr.signalShutdown()
 	_ = svr.mainLoop.poller.Polling(func(fd int, ev uint32, job internal.Job) error {
 		// mainReactor 只负责将监听fd传给acceptNewConnection方法.
-		return svr.acceptNewConnection(fd) // 它会将连接fd传递给一个subReactor.
+		return svr.acceptNewConnection(fd) // acceptNewConnection会将连接fd传递给一个subReactor.
 	})
 }
 
@@ -358,8 +352,8 @@ func (svr *server) startReactors() {
 }
 
 func (svr *server) activateSubReactor(lp *loop) {
-	... ...
-	_ = lp.poller.Polling(func(fd int, ev uint32, job internal.Job) error { // 这个事件循环在subReactor内部进行.
+	... ... // 事件循环在每个subReactor内部独立运行, 充分利用多核. 
+	_ = lp.poller.Polling(func(fd int, ev uint32, job internal.Job) error { 
 		if c, ack := lp.connections[fd]; ack {
 			switch c.outboundBuffer.IsEmpty() {
 			case false:
@@ -369,7 +363,7 @@ func (svr *server) activateSubReactor(lp *loop) {
 				return nil
 			case true:
 				if ev&netpoll.InEvents != 0 {
-					return lp.loopIn(c) //触发读事件处理方法
+					return lp.loopIn(c) //读事件的处理
 				}
 				return nil
 			}
@@ -381,7 +375,7 @@ func (svr *server) activateSubReactor(lp *loop) {
 func (lp *loop) loopIn(c *conn) error {
 	... ...
 loopReact:
-	out, action := lp.svr.eventHandler.React(c) //这个方法也就是业务逻辑如果阻塞, 整个loop也会阻塞. worker pool会接管处理.
+	out, action := lp.svr.eventHandler.React(c) //业务逻辑如果在React里阻塞, 整个loop也会阻塞. 需要放置在worker pool里处理.
 	if len(out) != 0 {
 		if frame, err := lp.svr.codec.Encode(out); err == nil {
 			c.write(frame)
@@ -403,35 +397,30 @@ Swoole 的 `Multi-Reactors` 模型:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="700">
 
+
 **Main Thread** 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="700">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="550">
 
 <br>
 
-**WorkThread** 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
-
-WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
+**Work Thread**  在客户端注册的读事件上监听, 触发后再交给一个 Work Process 来处理读事件的业务逻辑;  WorkThread 会先接收到这个 Work Process 注册的写事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
 <br>
 
-**Work Process** 将数据收发和数据处理分离开来，因为客户端不会关心后台的数据处理,它们只需要及时的信息反馈.  
+**Work Process** 将数据收发和数据处理分离开来，因为客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
 
-Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool), Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗。
-不同的进程使用不同的管道通信，可以最大化利用多核.
+Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool)处理耗时的操作, Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗. 不同的进程使用不同的管道通信，可以最大化利用多核.
 
 <br>
 
-WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
+WorkThread <=> Work Process 循环的过程类似 同步 I/O 模拟的 Proactor 模式: 
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="700">
 
-通过 Nginx + php-FPM 看 Master Process + Work Process 的架构: 
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="700">
+最后附一张 swoole 整体流程图(也可以和gnet的做下对比):
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
-
 
 <br>
 
