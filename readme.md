@@ -109,7 +109,8 @@ func netpollopen(fd uintptr, pd *pollDesc) int32 {               //对应 epollc
 	var ev epollevent
 	// _EPOLLRDHUP 解决了对端socket关闭，epoll本身并不能直接感知到这个关闭动作的问题
 	ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET 
-	*(**pollDesc)(unsafe.Pointer(&ev.data)) = pd // epollwait获取事件之后还会从&ev.data取出pd更改它的状态.
+	// epollwait获取事件之后还会从&ev.data取出pd更改它的状态.
+	*(**pollDesc)(unsafe.Pointer(&ev.data)) = pd //ev.data应该和*pollDesc具有相同的内存结构.
 	return -epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &ev)
 }
 // returns list of goroutines that become runnable
