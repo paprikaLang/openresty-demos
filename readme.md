@@ -16,7 +16,7 @@
 
 **OpenResty** 的 **cosocket** 就是基于 nginx_epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png" width="700">
 
 <img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="700">
 
@@ -289,7 +289,7 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 
 `gnet` 重新设计开发了一套 `主从多 Reactors + 线程/Go程池` 的异步网络模型:
 
-<img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" />
+<img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" width="700" />
 
 mainReactor(大堂经理): 利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
 
@@ -401,11 +401,11 @@ loopReact:
 
 Swoole 的 `Multi-Reactors` 模型:
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="700">
 
 **Main Thread** 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="550px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="700">
 
 <br>
 
@@ -424,13 +424,13 @@ Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool)
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="650px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="700">
 
 通过 Nginx + php-FPM 看 Master Process + Work Process 的架构: 
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="550px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="700">
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="650px;">
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
 
 
 <br>
