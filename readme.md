@@ -276,7 +276,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 和 openresty 一样以同步的方式编写异步逻辑.
+go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 可以和 openresty 一样以同步的方式编写异步逻辑.
 
 但是在海量连接并且活跃连接占比又很低的场景下, 这种模式会耗费大量资源, 性能也会因此降低. 
 
