@@ -403,19 +403,19 @@ Swoole 的 `Multi-Reactors` 模型:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
 
-Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
+**Main Thread** 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="550px;">
 
 <br>
 
-WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
+**WorkThread** 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
 
 WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
 <br>
 
-Work Process 将数据收发和数据处理分离开来，因为客户端不会关心后台的数据处理,它们只需要及时的信息反馈.  
+**Work Process** 将数据收发和数据处理分离开来，因为客户端不会关心后台的数据处理,它们只需要及时的信息反馈.  
 
 Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool), Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗。
 不同的进程使用不同的管道通信，可以最大化利用多核.
