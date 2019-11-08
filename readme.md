@@ -163,7 +163,6 @@ fd_poll_runtime.go 中 `pollDesc` 的 init -->
 netpoll.go 中的 runtime_pollServerInit -->
 
 一系列方法来生成 EPOLL 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 
-
 epoll 事件队列中来等待连接事件; 一旦有连接事件 accept 进来, 再用连接事件的 fd 监听数据的读写事件.
 
 ```go
