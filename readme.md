@@ -8,21 +8,22 @@
 
    ---   [[三种操作IO的方式]](https://github.com/eesly/brpc/blob/master/docs/cn/io.md#the-full-picture)
 
-
-<br>
-
 <br>
 
 # OpenResty
 
-**OpenResty** 中最核心的概念 **cosocket** 就是依靠 Nginx epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
+<br>
+
+**OpenResty** 的 **cosocket** 就是基于 nginx_epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png">
 
 <img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="700">
 
 Lua 脚本运行在协程上，通过暂停自己（yield)，把网络事件添加到 Nginx 监听列表中，并把运行权限交给 Nginx ; 
-当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理.
+
+当网络事件达到触发条件时，会唤醒 (resume）这个协程继续处理. 这样就以同步的模式实现了异步的代码逻辑.
+
 
 ```lua
 local sock, err = ngx.socket.tcp()
@@ -41,9 +42,9 @@ end
 
 1. 添加 ngx_http_lua_sleep_handler 回调函数;
 
-2. 然后调用 NGINX 提供的接口 ngx_add_timer ，向 NGINX 的事件循环中增加一个定时器; 
+2. 然后调用 Nginx 提供的接口 ngx_add_timer ，向 Nginx 的事件循环中增加一个定时器; 
 
-3. lua_yield 将 Lua 协程挂起，并把控制权交给 NGINX 的事件循环;
+3. lua_yield 将 Lua 协程挂起，并把控制权交给 Nginx 的事件循环;
 
 4. sleep 结束后,  ngx_http_lua_sleep_handler 被触发, 它里面会调用 ngx_http_lua_sleep_resume, lua_resume 最后唤醒了 Lua 协程.
 
@@ -56,10 +57,9 @@ static int ngx_http_lua_ngx_sleep(lua_State *L)
 }
 ```
 
-如果代码中没有 I/O 操作，而全是加解密CPU运算这样的任务，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求.
+如果代码中没有 I/O 操作或者 nginx.sleep(0)，而全是加解密运算，那么 Lua 协程就会一直占用 LuaJIT VM，直到处理完整个请求也不会交出控制权.
 
-用一个 swoole 的例子来看 IO密集型任务和CPU密集型任务的区别:
-
+一个简单的 swoole 协程的示例也可以验证 `IO密集型任务`和 `CPU密集型任务` 的区别:
 
 ```php
 <?php 
@@ -92,15 +92,15 @@ sleep():
 
 sleep() 可以看做是 CPU密集型任务, 不会引起协程的调度;
 
-Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO就绪时恢复运行.
-
-<br>
+Co::sleep() 模拟的是 IO密集型任务, 会引发协程的调度, 协程让出控制, 进入协程调度队列, IO 就绪时恢复运行.
 
 <br>
 
 # Golang
 
-**Golang** 在 linux 上通过 runtime 包中的 netpoll_epoll.go 也实现了底层的 event dispatcher .
+<br>
+
+**Golang** 在 linux 系统下也是基于 epoll 实现的网络 IO 系统.
 
 ```go
 // +build linux
@@ -162,7 +162,7 @@ fd_poll_runtime.go 中 `pollDesc` 的 init -->
 
 netpoll.go 中的 runtime_pollServerInit -->
 
-一系列方法来生成 epoll 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 
+一系列方法来生成 EPOLL 单例(serverInit.Do(runtime_pollServerInit)), 然后通过 runtime_pollOpen 将监听事件的 fd 添加到 
 
 epoll 事件队列中来等待连接事件; 一旦有连接事件 accept 进来, 再用连接事件的 fd 监听数据的读写事件.
 
@@ -276,7 +276,7 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 }
 ```
 
-go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 以同步的方式编写异步逻辑.
+go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go scheduler 的高效调度, 和 openresty 一样以同步的方式编写异步逻辑.
 
 但是在海量连接并且活跃连接占比又很低的场景下, 这种模式会耗费大量资源, 性能也会因此降低. 
 
@@ -289,8 +289,11 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 <br>
 
 `gnet` 重新设计开发了一套 `主从多 Reactors + 线程/Go程池` 的异步网络模型:
+
 MainReactor(大堂经理): 利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
+
 subReator(服务员): 监听多个 connection 的读写事件, 触发时调用 EventHandler.React 处理.
+
 worker pool(后厨): 不能及时处理的交给 ants 协程池.
 
 ```go
@@ -395,23 +398,28 @@ loopReact:
 
 <br>
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
-
-
 Swoole 的 `Multi-Reactors` 模型:
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
 
 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="550px;">
 
+<br>
+
 WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 再交给一个 Work Process 来处理请求对象的业务逻辑.
 
 WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
+
+<br>
 
 Work Process 将数据收发和数据处理分离开来，因为客户端不会关心后台的数据处理,它们只需要及时的信息反馈.  
 
 Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool), Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗。
 不同的进程使用不同的管道通信，可以最大化利用多核.
+
+<br>
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
