@@ -386,41 +386,21 @@ loopReact:
 }
 ```
 
-
 <br>
 
 # Swoole
 
 <br>
 
-Swoole 的 `Multi-Reactors` 模型:
+Swoole 的流程图能详细解释 `Multi-Reactors` 模型的内部运转:
+
+<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="700">
 
+Work Process 将数据收发和数据处理分离开来，客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
 
-**Main Thread** 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll3.jpg" width="550">
-
-<br>
-
-**Work Thread**  在客户端注册的读事件上监听, 触发后再交给一个 Work Process 来处理读事件的业务逻辑;  WorkThread 会先接收到这个 Work Process 注册的写事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
-
-<br>
-
-**Work Process** 将数据收发和数据处理分离开来，因为客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
-
-Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool)处理耗时的操作, Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗. 不同的进程使用不同的管道通信，可以最大化利用多核.
-
-<br>
-
-WorkThread <=> Work Process 循环的过程类似 同步 I/O 模拟的 Proactor 模式: 
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="700">
-
-最后附一张 swoole 整体流程图(也可以和gnet的做下对比):
-
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
+Worker Process 发起异步的 Task 任务(类似于 gnet 的 worker pool)处理耗时操作, 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗. 不同的进程使用不同的管道通信，可以最大化利用多核.
 
 <br>
 
