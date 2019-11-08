@@ -289,6 +289,8 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 
 `gnet` 重新设计开发了一套 `主从多 Reactors + 线程/Go程池` 的异步网络模型:
 
+<img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" />
+
 mainReactor(大堂经理): 利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
 
 subReator(服务员): 一个 subReator 可以在自己的 epoll 上监听多个 connection 的读写事件, 事件触发时调用 EventHandler.React 处理.
