@@ -288,22 +288,28 @@ go-net 的 `goroutine-per-connenction` 的模式简洁易用, 借助 go schedule
 
 <br>
 
+`gnet` 重新设计开发了一套 `主从多 Reactors + 线程/Go程池` 的异步网络模型:
+MainReactor(大堂经理): 利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
+subReator(服务员): 监听多个 connection 的读写事件, 触发时调用 EventHandler.React 处理.
+worker pool(后厨): 不能及时处理的交给 ants 协程池.
+
 ```go
 func (svr *server) activateMainReactor() {
 	defer svr.signalShutdown()
 	_ = svr.mainLoop.poller.Polling(func(fd int, ev uint32, job internal.Job) error {
-		return svr.acceptNewConnection(fd)
+		// mainReactor 只负责将监听fd传给acceptNewConnection方法.
+		return svr.acceptNewConnection(fd) // 它会将连接fd传递给一个subReactor.
 	})
 }
 
 func (p *Poller) Polling(callback func(fd int, ev uint32, job internal.Job) error) (err error) {
 	... ...
 	for {
-		n, err0 := unix.EpollWait(p.fd, el.events, -1)
+		n, err0 := unix.EpollWait(p.fd, el.events, -1) // epoll还是event-loop事件驱动的核心
 		... ...
 		for i := 0; i < n; i++ {
 			if fd := int(el.events[i].Fd); fd != p.wfd {
-				if err = callback(fd, el.events[i].Events, nil); err != nil {
+				if err = callback(fd, el.events[i].Events, nil); err != nil { //异步回调触发的事件
 					return
 				}
 			} ... ...
@@ -326,7 +332,7 @@ func (svr *server) acceptNewConnection(fd int) error {
 	lp := svr.subLoopGroup.next() //分配一个subReactor
 	c := newConn(nfd, lp, sa)
 	_ = lp.poller.Trigger(func() (err error) {
-		if err = lp.poller.AddRead(nfd); err != nil { //AddRead 内部调用了subReactor epoll 的 unix.EpollCtl
+		if err = lp.poller.AddRead(nfd); err != nil { //AddRead 内部调用了subReactor 内置 epoll 的 unix.EpollCtl
 			return
 		}
 		lp.connections[nfd] = c
@@ -349,7 +355,7 @@ func (svr *server) startReactors() {
 
 func (svr *server) activateSubReactor(lp *loop) {
 	... ...
-	_ = lp.poller.Polling(func(fd int, ev uint32, job internal.Job) error {
+	_ = lp.poller.Polling(func(fd int, ev uint32, job internal.Job) error { // 这个事件循环在subReactor内部进行.
 		if c, ack := lp.connections[fd]; ack {
 			switch c.outboundBuffer.IsEmpty() {
 			case false:
@@ -359,7 +365,7 @@ func (svr *server) activateSubReactor(lp *loop) {
 				return nil
 			case true:
 				if ev&netpoll.InEvents != 0 {
-					return lp.loopIn(c)
+					return lp.loopIn(c) //触发读事件处理方法
 				}
 				return nil
 			}
@@ -371,7 +377,7 @@ func (svr *server) activateSubReactor(lp *loop) {
 func (lp *loop) loopIn(c *conn) error {
 	... ...
 loopReact:
-	out, action := lp.svr.eventHandler.React(c)
+	out, action := lp.svr.eventHandler.React(c) //这个方法也就是业务逻辑如果阻塞, 整个loop也会阻塞. worker pool会接管处理.
 	if len(out) != 0 {
 		if frame, err := lp.svr.codec.Encode(out); err == nil {
 			c.write(frame)
@@ -391,9 +397,8 @@ loopReact:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="650px;">
 
-事件处理模型 Reactor 将I/O事件注册到多路复用器(能维护自己的事件循环, 监听不同的I/O事件)上，一旦有事件触发, 事件分离器就会将其分发到事件处理器中执行事件的处理逻辑.
 
-Swoole 的 Main Thread , WorkThread , Work Process 均是由 Reactor 驱动, 并按照 注册事件等待触发 -> 分发 -> 处理 这样的模式运行.
+Swoole 的 `Multi-Reactors` 模型:
 
 Main Thread 负责监听服务端口接收网络连接, 将连接成功的I/O事件分发给 WorkThread .
 
@@ -403,46 +408,26 @@ WorkThread 在客户端request注册的读就绪事件上等待I/O操作完成, 
 
 WorkThread 会先接收到这个 Work Process 注册的写就绪事件, 然后业务逻辑开始处理, 处理完成后触发此事件. 
 
-Work Process 将数据收发和数据处理分离开来，只有 Worker Process 可以发起异步的Task任务,Task 底层使用 Unix Socket 管道通信，是全内存的，没有IO消耗。不同的进程使用不同的管道通信，可以最大化利用多核.
+Work Process 将数据收发和数据处理分离开来，因为客户端不会关心后台的数据处理,它们只需要及时的信息反馈.  
+
+Worker Process 可以发起异步的 Task 任务(类似于 gnet 的 worker pool), Task 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗。
+不同的进程使用不同的管道通信，可以最大化利用多核.
 
 WorkThread <=> Work Process 这整个过程类似 同步 I/O 模拟的 Proactor 模式: 
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll4.jpg" width="650px;">
 
-从整体上看 Master Process + Work Process 的架构类似于 Nginx + php-FPM . 
+通过 Nginx + php-FPM 看 Master Process + Work Process 的架构: 
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll5.jpg" width="550px;">
-
-总结一下 Swoole 的进程间通信
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="650px;">
 
 
 <br>
 
-*注*
+*其他链接*
 
 [百万 Go TCP 连接的思考2: 百万连接的吞吐率和延迟](https://colobu.com/2019/02/27/1m-go-tcp-connection-2/)
-[Benchmark for implementation of servers that support 1m connections](https://github.com/smallnest/1m-go-tcp-server)
-
-文章和源码包含以下内容:
-
-8_server_workerpool: use **Reactor** pattern to implement multiple event loops
-
-9_few_clients_high_throughputs: a simple goroutines per connection server for test throughtputs and latency
-
-10_io_intensive_epoll_server: an io-bound multiple epoll server
-
-11_io_intensive_goroutine: an io-bound goroutines per connection server
-
-12_cpu_intensive_epoll_server: a cpu-bound multiple epoll server
-
-13_cpu_intensive_goroutine: an cpu-bound goroutines per connection server
-
-
-<br>
-
-
-*参考*
 
 
