@@ -272,9 +272,9 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 
 go-net 的 `goroutine-per-connenction` 的模式借助 go scheduler 的高效调度, 以同步的方式编写异步逻辑, 简洁易用.
 
-但是遇到海量连接并且活跃连接占比又很低的情况, 这种模式就会耗费大量资源, 性能上也会随之下降. 
+但是遇到海量连接并且活跃连接占比又很低的情况, 这种模式会耗费大量无用资源, 性能上也会随之下降. 
 
-看官们可以通过模拟餐厅高峰期时的场景, 将 `顾客-服务员-厨师` 与 `connection-goroutine-threads_pool` 对应上联系, 来想想如何提高效率节省资源.
+看官们可以模拟餐厅高峰期时的场景, 将 `顾客-服务员-厨师` 与 `connection-goroutine-worker_pool` 一一对应, 看能否提高我们的工程效率并节省资源.
 
 <br>
 
@@ -286,11 +286,11 @@ go-net 的 `goroutine-per-connenction` 的模式借助 go scheduler 的高效调
 
 <img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" width="700" />
 
-mainReactor(大堂经理):  利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
+**mainReactor**(大堂经理):  利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
 
-subReator(服务员):      一个 subReator 可以在自己的 epoll 上监听多个 connection 的读写事件, 事件触发时调用 EventHandler.React 处理.
+**subReator**(服务员):      每个 subReator 可以在自己的 epoll 上监听多个 connection 的读写事件, 事件触发时调用 EventHandler.React 处理.
 
-worker pool(后厨):      不能及时处理的交给 ants 协程池.
+**worker pool**(后厨):      不能及时处理的交给 ants 协程池.
 
 ```go
 func (svr *server) activateMainReactor() {
@@ -393,15 +393,17 @@ loopReact:
 
 <br>
 
-Swoole 的流程图能详细解释 `Multi-Reactors` 模型的内部运转:
+Swoole 的流程图能详细地展示 `Multi-Reactors` 模型的内部运转过程:
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
 
 <img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="700">
 
-Work Process 将数据收发和数据处理分离开来，客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
+**Work Process** 将数据收发和数据处理分离开来，客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
 
-Worker Process 发起异步的 Task 任务(类似于 gnet 的 worker pool)处理耗时操作, 底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗. 不同的进程使用不同的管道通信，可以最大化利用多核.
+Worker Process 发起异步的 Task 任务(类似于 gnet 的 worker pool)用来处理耗时操作,
+
+它的底层使用 Unix Socket 管道通信，是全内存的，没有 IO 消耗. 不同的进程使用不同的管道通信，可以最大化利用多核.
 
 <br>
 
