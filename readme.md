@@ -272,9 +272,9 @@ func netpollblock(pd *pollDesc, mode int32, waitio bool) bool {
 
 go-net 的 `goroutine-per-connenction` 的模式借助 go scheduler 的高效调度, 以同步的方式编写异步逻辑, 简洁易用.
 
-但是遇到海量连接并且活跃连接占比又很低的情况, 这种模式会耗费大量无用资源, 性能上也会随之下降. 
+但是如果遇到海量连接并且活跃连接占比又很低的情况, 这种模式会耗费大量无用资源, 性能上也会随之下降. 
 
-看官们可以模拟餐厅高峰期时的场景, 将 `顾客-服务员-厨师` 与 `connection-goroutine-worker_pool` 一一对应, 看能否提高我们的工程效率并节省资源.
+我们可以先拿餐厅中 `顾客-服务员-厨师` 这些角色与 `connection-goroutine-worker_pool`做一个类比, 想一想改进的办法.
 
 <br>
 
