@@ -1,3 +1,4 @@
+
 > linux一般使用 non-blocking IO 提高 IO 并发度。当IO并发度很低时，non-blocking IO 不一定比 blocking IO 更高效，因为后者完全由内核负责，而read/write这类系统调用已高度优化，效率显然高于多个线程协作的 non-blocking IO。但当 IO 并发度愈发提高时，blocking IO 阻塞一个线程的弊端便显露出来：内核得不停地在线程间切换才能完成有效的工作，一个 cpu core 上可能只做了一点点事情，就马上又换成了另一个线程，cpu cache 没得到充分利用，另外大量的线程会使得依赖 thread-local 加速的代码性能明显下降，如 tcmalloc ，一旦 malloc 变慢，程序整体性能往往也会随之下降。
 
 []()
@@ -16,7 +17,7 @@
 
 **OpenResty** 的 **cosocket** 就是基于 nginx_epoll 的 event dispatcher 和 lua 语言的协程特性 实现的:
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll1.png" width="700">
+<img src="https://upic.paprikalang.site/openresty.png" width="700">
 
 <img src="https://i.loli.net/2019/10/22/s2wuiFUXQl56eOV.jpg" width="700">
 
@@ -284,7 +285,7 @@ go-net 的 `goroutine-per-connenction` 的模式借助 go scheduler 的高效调
 
 `gnet` 重新设计开发了一套 `主从多 Reactors + 线程/Go程池` 的异步网络模型:
 
-<img src="https://user-images.githubusercontent.com/7496278/64918783-90de3b80-d7d5-11e9-9190-ff8277c95db1.png" width="700" />
+<img src="https://upic.paprikalang.site/open3.png" width="700" />
 
 **mainReactor**(大堂经理):  利用内置的 Round-Robin 轮询负载均衡算法, 将 newConnection 分配给一个 subReator . 
 
@@ -395,9 +396,9 @@ loopReact:
 
 Swoole 的流程图能详细地展示 `Multi-Reactors` 模型的内部运转过程:
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll6.png" width="700">
+<img src="https://upic.paprikalang.site/open4.png" width="700">
 
-<img src="https://raw.githubusercontent.com/paprikaLang/paprikaLang.github.io/imgs/epoll2.png" width="700">
+<img src="https://upic.paprikalang.site/open5.png" width="700">
 
 **Work Process** 将数据收发和数据处理分离开来，客户端不会关心后台的如何处理数据,它们只需要及时的信息反馈. 
 
@@ -410,5 +411,3 @@ Worker Process 发起异步的 Task 任务(类似于 gnet 的 worker pool)用来
 *其他链接*
 
 [百万 Go TCP 连接的思考2: 百万连接的吞吐率和延迟](https://colobu.com/2019/02/27/1m-go-tcp-connection-2/)
-
-
